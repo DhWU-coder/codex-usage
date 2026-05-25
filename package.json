@@ -1,0 +1,20 @@
+{
+  "name": "codex-usage",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "codex-usage": "./src/cli.js",
+    "cud": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "export": "node src/static-export.js",
+    "summary": "node src/cli.js summary",
+    "serve": "node src/cli.js run"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
