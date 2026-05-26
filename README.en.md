@@ -107,6 +107,12 @@ Start a background gateway:
 codex-usage gateway
 ```
 
+Restart the background gateway:
+
+```bash
+codex-usage restart
+```
+
 Stop services registered by this tool:
 
 ```bash
@@ -175,7 +181,7 @@ Endpoint notes:
 The default low-memory `gateway` may reject `detail=full` to avoid excessive memory usage. For full detail debugging, restart with a larger memory limit:
 
 ```bash
-codex-usage gateway --memory-mb 512
+codex-usage restart --memory-mb 512
 ```
 
 ## Extra Codex Homes

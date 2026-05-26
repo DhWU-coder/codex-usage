@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -72,6 +72,15 @@ function waitForExit(child) {
     return Promise.resolve(child.exitCode);
   }
   return new Promise((resolve) => child.once("exit", resolve));
+}
+
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
 }
 
 function runCli(args) {
@@ -155,6 +164,59 @@ test("cli gateway starts a background usage server and returns", async () => {
 
     const usage = await fetch(`${url}/api/usage`).then((response) => response.json());
     assert.equal(usage.summary.totals.total, 77);
+  } finally {
+    await runCli(["stop", "--state-file", stateFile]);
+  }
+});
+
+test("cli restart stops existing services and starts a new gateway", async () => {
+  const homeDir = await makeFixtureHome();
+  const stateFile = path.join(homeDir, "services.json");
+
+  try {
+    const startOutput = await runCli([
+      "gateway",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--home-dir",
+      homeDir,
+      "--state-file",
+      stateFile,
+    ]);
+    const startMatch = startOutput.match(/(http:\/\/127\.0\.0\.1:\d+).*pid (\d+)/);
+    assert.ok(startMatch, startOutput);
+    const firstPid = Number(startMatch[2]);
+    assert.equal(isProcessRunning(firstPid), true);
+
+    const restartOutput = await runCli([
+      "restart",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--home-dir",
+      homeDir,
+      "--state-file",
+      stateFile,
+    ]);
+    assert.match(restartOutput, /Stopped 1 Codex Usage service/);
+    const restartMatch = restartOutput.match(/Codex Usage gateway restarted: (http:\/\/127\.0\.0\.1:\d+) \(pid (\d+)\)/);
+    assert.ok(restartMatch, restartOutput);
+    const restartUrl = restartMatch[1];
+    const restartPid = Number(restartMatch[2]);
+
+    assert.notEqual(restartPid, firstPid);
+    assert.equal(isProcessRunning(firstPid), false);
+    const usage = await fetch(`${restartUrl}/api/usage`).then((response) => response.json());
+    assert.equal(usage.summary.totals.total, 77);
+
+    const state = JSON.parse(await readFile(stateFile, "utf8"));
+    assert.deepEqual(
+      state.services.map((service) => service.pid),
+      [restartPid],
+    );
   } finally {
     await runCli(["stop", "--state-file", stateFile]);
   }

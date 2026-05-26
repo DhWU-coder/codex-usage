@@ -108,6 +108,12 @@ cud
 codex-usage gateway
 ```
 
+重启后台 gateway：
+
+```bash
+codex-usage restart
+```
+
 停止通过本工具登记的服务：
 
 ```bash
@@ -176,7 +182,7 @@ GET /api/summary
 默认低内存 `gateway` 可能会拒绝 `detail=full`，以避免完整明细 report 占用过高。需要调试完整明细时，可以临时提高内存：
 
 ```bash
-codex-usage gateway --memory-mb 512
+codex-usage restart --memory-mb 512
 ```
 
 ## 额外 Codex Home

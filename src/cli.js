@@ -22,6 +22,7 @@ const USAGE = `Usage:
   codex-usage dashboard [--host <host>] [--port <port>] [--home-dir <dir>]
   codex-usage -d [--host <host>] [--port <port>] [--home-dir <dir>]
   codex-usage gateway [--host <host>] [--port <port>] [--home-dir <dir>] [--memory-mb <mb>]
+  codex-usage restart [--host <host>] [--port <port>] [--home-dir <dir>] [--memory-mb <mb>]
   codex-usage run [--host <host>] [--port <port>] [--home-dir <dir>]
   codex-usage stop`;
 
@@ -374,7 +375,7 @@ async function openDashboard(args) {
   console.log(`Codex Usage dashboard: ${service.url}`);
 }
 
-async function stopServers(args) {
+async function stopRunningServices(args, { announce = true } = {}) {
   const stateFile = stateFilePath(args);
   const services = await readServices(stateFile);
   const runningServices = services.filter(
@@ -383,8 +384,10 @@ async function stopServers(args) {
 
   if (runningServices.length === 0) {
     await writeServices(stateFile, []);
-    console.log("No running Codex Usage services found.");
-    return;
+    if (announce) {
+      console.log("No running Codex Usage services found.");
+    }
+    return { stoppedServices: [], stillRunningServices: [] };
   }
 
   for (const service of runningServices) {
@@ -409,14 +412,36 @@ async function stopServers(args) {
   });
 
   if (stillRunningServices.length > 0) {
-    console.error(
-      `Stopped ${stoppedServices.length} Codex Usage service(s), ${stillRunningServices.length} still running.`,
-    );
+    if (announce) {
+      console.error(
+        `Stopped ${stoppedServices.length} Codex Usage service(s), ${stillRunningServices.length} still running.`,
+      );
+    }
+    return { stoppedServices, stillRunningServices };
+  }
+
+  if (announce) {
+    console.log(`Stopped ${stoppedServices.length} Codex Usage service(s).`);
+  }
+  return { stoppedServices, stillRunningServices };
+}
+
+async function stopServers(args) {
+  const { stillRunningServices } = await stopRunningServices(args);
+  if (stillRunningServices.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function restartGateway(args) {
+  const { stillRunningServices } = await stopRunningServices(args);
+  if (stillRunningServices.length > 0) {
     process.exitCode = 1;
     return;
   }
 
-  console.log(`Stopped ${stoppedServices.length} Codex Usage service(s).`);
+  const service = await startGateway(args, { announce: false });
+  console.log(`Codex Usage gateway restarted: ${service.url} (pid ${service.pid})`);
 }
 
 async function main() {
@@ -434,6 +459,11 @@ async function main() {
 
   if (command === "gateway") {
     await startGateway(args);
+    return;
+  }
+
+  if (command === "restart") {
+    await restartGateway(args);
     return;
   }
 
