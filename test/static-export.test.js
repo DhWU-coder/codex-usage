@@ -25,6 +25,8 @@ test("renderStaticDashboardHtml embeds usage data and app assets", () => {
   assert.match(html, /window.__CODEX_USAGE_REPORT__/);
   assert.match(html, /CLI/);
   assert.match(html, /timelineChart/);
+  assert.match(html, /id="usageTooltip"/);
+  assert.match(html, /role="tooltip"/);
   assert.match(html, /themeToggle/);
   assert.match(html, /data-theme-option="dark"/);
 });

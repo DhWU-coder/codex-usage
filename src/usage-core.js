@@ -623,7 +623,7 @@ function bucketKey(date, bucket) {
   return localDateKey(date);
 }
 
-function groupByUsage(events, keyFn) {
+function groupByUsage(events, keyFn, options = {}) {
   const groups = new Map();
   for (const event of events) {
     const key = keyFn(event);
@@ -633,16 +633,47 @@ function groupByUsage(events, keyFn) {
       count: 0,
       sessions: new Set(),
       total: emptyUsage(),
+      channelGroups: options.includeChannels ? new Map() : null,
     };
     current.count += 1;
     current.sessions.add(event.sessionId);
     addUsage(current.total, event.total);
+    if (current.channelGroups) {
+      const channelKey = event.channel || "Unknown";
+      const channel = current.channelGroups.get(channelKey) || {
+        key: channelKey,
+        name: channelKey,
+        count: 0,
+        sessions: new Set(),
+        total: emptyUsage(),
+      };
+      channel.count += 1;
+      channel.sessions.add(event.sessionId);
+      addUsage(channel.total, event.total);
+      current.channelGroups.set(channelKey, channel);
+    }
     groups.set(key, current);
   }
   return [...groups.values()]
     .map((group) => ({
-      ...group,
+      key: group.key,
+      name: group.name,
+      count: group.count,
       sessions: group.sessions.size,
+      total: group.total,
+      ...(group.channelGroups
+        ? {
+            channels: [...group.channelGroups.values()]
+              .map((channel) => ({
+                key: channel.key,
+                name: channel.name,
+                count: channel.count,
+                sessions: channel.sessions.size,
+                total: channel.total,
+              }))
+              .sort((a, b) => b.total.total - a.total.total),
+          }
+        : {}),
     }))
     .sort((a, b) => b.total.total - a.total.total);
 }
@@ -689,7 +720,7 @@ function addIndexedUsage(target, event) {
   return target;
 }
 
-function groupIndexedEvents(index, events, keyFn) {
+function groupIndexedEvents(index, events, keyFn, options = {}) {
   const groups = new Map();
   for (const event of events) {
     const key = keyFn(event) || "Unknown";
@@ -699,16 +730,47 @@ function groupIndexedEvents(index, events, keyFn) {
       count: 0,
       sessions: new Set(),
       total: emptyUsage(),
+      channelGroups: options.includeChannels ? new Map() : null,
     };
     current.count += 1;
     current.sessions.add(event.s);
     addIndexedUsage(current.total, event);
+    if (current.channelGroups) {
+      const channelKey = index.strings[event.c] || "Unknown";
+      const channel = current.channelGroups.get(channelKey) || {
+        key: channelKey,
+        name: channelKey,
+        count: 0,
+        sessions: new Set(),
+        total: emptyUsage(),
+      };
+      channel.count += 1;
+      channel.sessions.add(event.s);
+      addIndexedUsage(channel.total, event);
+      current.channelGroups.set(channelKey, channel);
+    }
     groups.set(key, current);
   }
   return [...groups.values()]
     .map((group) => ({
-      ...group,
+      key: group.key,
+      name: group.name,
+      count: group.count,
       sessions: group.sessions.size,
+      total: group.total,
+      ...(group.channelGroups
+        ? {
+            channels: [...group.channelGroups.values()]
+              .map((channel) => ({
+                key: channel.key,
+                name: channel.name,
+                count: channel.count,
+                sessions: channel.sessions.size,
+                total: channel.total,
+              }))
+              .sort((a, b) => b.total.total - a.total.total),
+          }
+        : {}),
     }))
     .sort((a, b) => b.total.total - a.total.total);
 }
@@ -743,7 +805,7 @@ export function summarizeUsageIndex(index, filters = {}) {
 
   const sessionIds = new Set(events.map((event) => event.s));
   const totals = events.reduce((sum, event) => addIndexedUsage(sum, event), emptyUsage());
-  const timeline = groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket))
+  const timeline = groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket), { includeChannels: true })
     .sort((a, b) => a.key.localeCompare(b.key));
 
   return {
@@ -785,7 +847,7 @@ export function summarizeUsage(report, filters = {}) {
 
   const sessionIds = new Set(events.map((event) => event.sessionId));
   const totals = events.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
-  const timeline = groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket))
+  const timeline = groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket), { includeChannels: true })
     .sort((a, b) => a.key.localeCompare(b.key));
 
   return {

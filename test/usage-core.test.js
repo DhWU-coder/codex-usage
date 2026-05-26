@@ -185,6 +185,17 @@ test("buildUsageReport and summarizeUsage aggregate totals by channel and period
     ]),
   );
   await writeFile(
+    path.join(mainSessions, "cli.jsonl"),
+    jsonl([
+      {
+        timestamp: "2026-05-01T03:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "cli-1", source: "cli", originator: "codex-tui", cwd: "/work/c" },
+      },
+      tokenRow("2026-05-01T03:01:00.000Z", 100, 80, 20, 20),
+    ]),
+  );
+  await writeFile(
     path.join(jetbrainsSessions, "jetbrains.jsonl"),
     jsonl([
       {
@@ -213,14 +224,15 @@ test("buildUsageReport and summarizeUsage aggregate totals by channel and period
     bucket: "day",
   });
 
-  assert.equal(all.totals.total, 500);
-  assert.equal(usageIndexMetadata(index).eventCount, 2);
+  assert.equal(all.totals.total, 600);
+  assert.equal(usageIndexMetadata(index).eventCount, 3);
   assert.equal(indexedAll.totals.total, all.totals.total);
   assert.deepEqual(
     indexedAll.channels.map((channel) => [channel.name, channel.total.total]),
     [
       ["JetBrains PyCharm", 300],
       ["Codex Desktop", 200],
+      ["CLI", 100],
     ],
   );
   assert.deepEqual(
@@ -228,6 +240,21 @@ test("buildUsageReport and summarizeUsage aggregate totals by channel and period
     [
       ["JetBrains PyCharm", 300],
       ["Codex Desktop", 200],
+      ["CLI", 100],
+    ],
+  );
+  assert.deepEqual(
+    all.timeline.find((row) => row.key === "2026-04-27").channels.map((channel) => [channel.name, channel.total.total]),
+    [
+      ["Codex Desktop", 200],
+      ["CLI", 100],
+    ],
+  );
+  assert.deepEqual(
+    indexedAll.timeline.find((row) => row.key === "2026-04-27").channels.map((channel) => [channel.name, channel.total.total]),
+    [
+      ["Codex Desktop", 200],
+      ["CLI", 100],
     ],
   );
   assert.equal(custom.totals.total, 300);

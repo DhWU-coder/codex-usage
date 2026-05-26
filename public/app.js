@@ -18,6 +18,8 @@ const compactFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 2,
 });
+const tooltipRows = new WeakMap();
+const timelineBars = new WeakMap();
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -68,6 +70,138 @@ function formatTokens(value) {
 
 function formatCompact(value) {
   return compactFormatter.format(Math.round(value || 0));
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const replacements = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return replacements[character];
+  });
+}
+
+export function formatUsageTooltip(row) {
+  const total = row?.total || emptyUsage();
+  const details = [
+    ["总 tokens", usageValue(total, "total")],
+    ["输入", usageValue(total, "input")],
+    ["缓存输入", usageValue(total, "cached")],
+    ["输出", usageValue(total, "output")],
+    ["推理输出", usageValue(total, "reasoning")],
+    ["事件", row?.count || 0],
+    ["会话", row?.sessions || 0],
+  ];
+  const channels = row?.channels || [];
+  return `
+    <div class="usage-tooltip-title">${escapeHtml(row?.name || row?.key || "未知")}</div>
+    <div class="usage-tooltip-grid">
+      ${details
+        .map(
+          ([label, value]) => `
+            <span class="usage-tooltip-label">${label}</span>
+            <span class="usage-tooltip-value">${formatTokens(value)}</span>
+          `,
+        )
+        .join("")}
+    </div>
+    ${
+      channels.length
+        ? `
+          <div class="usage-tooltip-subtitle">渠道</div>
+          <div class="usage-tooltip-grid">
+            ${channels
+              .map(
+                (channel) => `
+                  <span class="usage-tooltip-label">${escapeHtml(channel.name)}</span>
+                  <span class="usage-tooltip-value">${formatTokens(usageValue(channel.total, "total"))}</span>
+                `,
+              )
+              .join("")}
+          </div>
+        `
+        : ""
+    }
+  `;
+}
+
+function usageTooltip() {
+  return $("#usageTooltip");
+}
+
+function hideUsageTooltip() {
+  const tooltip = usageTooltip();
+  if (tooltip) {
+    tooltip.hidden = true;
+  }
+}
+
+function positionUsageTooltip(event) {
+  const tooltip = usageTooltip();
+  if (!tooltip || tooltip.hidden) {
+    return;
+  }
+  const offset = 14;
+  const margin = 8;
+  const width = tooltip.offsetWidth;
+  const height = tooltip.offsetHeight;
+  let left = event.clientX + offset;
+  let top = event.clientY + offset;
+  if (left + width + margin > window.innerWidth) {
+    left = event.clientX - width - offset;
+  }
+  if (top + height + margin > window.innerHeight) {
+    top = event.clientY - height - offset;
+  }
+  tooltip.style.left = `${Math.max(margin, left)}px`;
+  tooltip.style.top = `${Math.max(margin, top)}px`;
+}
+
+function showUsageTooltip(row, event) {
+  const tooltip = usageTooltip();
+  if (!tooltip || !row) {
+    hideUsageTooltip();
+    return;
+  }
+  tooltip.innerHTML = formatUsageTooltip(row);
+  tooltip.hidden = false;
+  positionUsageTooltip(event);
+}
+
+function bindUsageRows(container, selector, rows) {
+  container.querySelectorAll(selector).forEach((element, index) => {
+    tooltipRows.set(element, rows[index]);
+  });
+}
+
+function getChannelColors(rows) {
+  const styles = getComputedStyle(document.documentElement);
+  const palette = [
+    styles.getPropertyValue("--blue").trim() || "#2364aa",
+    styles.getPropertyValue("--green").trim() || "#2f855a",
+    styles.getPropertyValue("--gold").trim() || "#b7791f",
+    styles.getPropertyValue("--red").trim() || "#c05621",
+    styles.getPropertyValue("--muted").trim() || "#607080",
+  ];
+  return new Map(rows.map((row, index) => [row.name, palette[index % palette.length]]));
+}
+
+export function timelineChannelSegments(row, channelRows = []) {
+  const rowChannels = new Map((row?.channels || []).map((channel) => [channel.name, channel]));
+  const ordered = [];
+  for (const channel of channelRows) {
+    const match = rowChannels.get(channel.name);
+    if (match) {
+      ordered.push(match);
+      rowChannels.delete(channel.name);
+    }
+  }
+  ordered.push(...rowChannels.values());
+  return ordered;
 }
 
 function dateKey(date) {
@@ -145,7 +279,7 @@ function emptyUsage() {
   return { total: 0, input: 0, cached: 0, output: 0, reasoning: 0 };
 }
 
-function groupEvents(events, keyFn) {
+function groupEvents(events, keyFn, options = {}) {
   const groups = new Map();
   for (const event of events) {
     const key = keyFn(event);
@@ -155,19 +289,50 @@ function groupEvents(events, keyFn) {
       count: 0,
       sessions: new Set(),
       total: emptyUsage(),
+      channelGroups: options.includeChannels ? new Map() : null,
     };
     group.count += 1;
     group.sessions.add(event.sessionId);
     addUsage(group.total, event.total);
+    if (group.channelGroups) {
+      const channelKey = event.channel || "Unknown";
+      const channel = group.channelGroups.get(channelKey) || {
+        key: channelKey,
+        name: channelKey,
+        count: 0,
+        sessions: new Set(),
+        total: emptyUsage(),
+      };
+      channel.count += 1;
+      channel.sessions.add(event.sessionId);
+      addUsage(channel.total, event.total);
+      group.channelGroups.set(channelKey, channel);
+    }
     groups.set(key, group);
   }
   return [...groups.values()].map((group) => ({
-    ...group,
+    key: group.key,
+    name: group.name,
+    count: group.count,
     sessions: group.sessions.size,
+    total: group.total,
+    ...(group.channelGroups
+      ? {
+          channels: [...group.channelGroups.values()]
+            .map((channel) => ({
+              key: channel.key,
+              name: channel.name,
+              count: channel.count,
+              sessions: channel.sessions.size,
+              total: channel.total,
+            }))
+            .sort((a, b) => b.total.total - a.total.total),
+        }
+      : {}),
   }));
 }
 
-function summarize(report) {
+export function summarize(report) {
   const range = getRange(report.events);
   const events = report.events.filter((event) => {
     const date = new Date(event.timestamp);
@@ -183,7 +348,9 @@ function summarize(report) {
     return true;
   });
   const totals = events.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
-  const timeline = groupEvents(events, (event) => bucketKey(event.timestamp, state.bucket)).sort((a, b) => a.key.localeCompare(b.key));
+  const timeline = groupEvents(events, (event) => bucketKey(event.timestamp, state.bucket), { includeChannels: true }).sort((a, b) =>
+    a.key.localeCompare(b.key),
+  );
   const channels = groupEvents(events, (event) => event.channel).sort((a, b) => b.total.total - a.total.total);
   const projects = groupEvents(events, (event) => event.cwd || "Unknown cwd").sort((a, b) => b.total.total - a.total.total).slice(0, 25);
   const models = groupEvents(events, (event) => event.model || "Unknown model").sort((a, b) => b.total.total - a.total.total);
@@ -220,7 +387,7 @@ function rangeLabel(summary) {
   return `${start} 至 ${end} · ${bucket}`;
 }
 
-function renderBarList(container, rows) {
+function renderBarList(container, rows, colorMap = null) {
   if (!rows.length) {
     container.innerHTML = `<div class="empty">没有匹配的用量记录</div>`;
     return;
@@ -229,17 +396,20 @@ function renderBarList(container, rows) {
   container.innerHTML = rows
     .map((row) => {
       const width = Math.max(2, (row.total.total / max) * 100);
+      const color = colorMap?.get(row.name);
+      const fillStyle = `width: ${width}%;${color ? ` background: ${color};` : ""}`;
       return `
-        <div class="bar-row">
+        <div class="bar-row" data-usage-tooltip="true">
           <div class="bar-label">
             <span class="bar-name" title="${row.name}">${row.name}</span>
             <span class="bar-value">${formatTokens(row.total.total)}</span>
           </div>
-          <div class="bar-track"><div class="bar-fill" style="width: ${width}%"></div></div>
+          <div class="bar-track"><div class="bar-fill" style="${fillStyle}"></div></div>
         </div>
       `;
     })
     .join("");
+  bindUsageRows(container, ".bar-row", rows);
 }
 
 function renderCompactList(container, rows) {
@@ -250,7 +420,7 @@ function renderCompactList(container, rows) {
   container.innerHTML = rows
     .map(
       (row) => `
-        <div class="compact-row">
+        <div class="compact-row" data-usage-tooltip="true">
           <div class="compact-label">
             <span class="compact-name" title="${row.name}">${row.name}</span>
             <span class="compact-value">${formatTokens(row.total.total)}</span>
@@ -259,10 +429,13 @@ function renderCompactList(container, rows) {
       `,
     )
     .join("");
+  bindUsageRows(container, ".compact-row", rows);
 }
 
-function drawTimeline(canvas, rows) {
+function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map()) {
   const context = canvas.getContext("2d");
+  canvas.dataset.usageTooltip = "true";
+  timelineBars.set(canvas, []);
   const ratio = window.devicePixelRatio || 1;
   const styles = getComputedStyle(document.documentElement);
   const chartLine = styles.getPropertyValue("--chart-line").trim() || "#d9e0e6";
@@ -300,15 +473,37 @@ function drawTimeline(canvas, rows) {
   const max = Math.max(...rows.map((row) => row.total.total), 1);
   const gap = Math.min(10, chartWidth / Math.max(rows.length, 1) * 0.18);
   const barWidth = Math.max(4, (chartWidth - gap * (rows.length - 1)) / rows.length);
+  const bars = [];
 
   rows.forEach((row, index) => {
     const value = row.total.total;
     const barHeight = Math.max(2, (value / max) * chartHeight);
     const x = padding.left + index * (barWidth + gap);
-    const y = padding.top + chartHeight - barHeight;
-    context.fillStyle = index % 2 === 0 ? blue : green;
-    context.fillRect(x, y, barWidth, barHeight);
+    const segments = timelineChannelSegments(row, channelRows);
+    let y = padding.top + chartHeight;
+    if (!segments.length || !value) {
+      context.fillStyle = blue;
+      context.fillRect(x, y - barHeight, barWidth, barHeight);
+    }
+    for (const segment of segments) {
+      const segmentValue = usageValue(segment.total, "total");
+      if (!segmentValue) {
+        continue;
+      }
+      const segmentHeight = (segmentValue / value) * barHeight;
+      y -= segmentHeight;
+      context.fillStyle = channelColors.get(segment.name) || green;
+      context.fillRect(x, y, barWidth, Math.max(0.5, segmentHeight));
+    }
+    bars.push({
+      x: x - gap / 2,
+      y: padding.top,
+      width: barWidth + gap,
+      height: chartHeight,
+      row,
+    });
   });
+  timelineBars.set(canvas, bars);
 
   context.fillStyle = chartText;
   context.font = "12px system-ui";
@@ -326,6 +521,41 @@ function drawTimeline(canvas, rows) {
     context.fillText(row.key, 0, 0);
     context.restore();
   }
+}
+
+function timelineRowAt(canvas, event) {
+  const bars = timelineBars.get(canvas) || [];
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const hit = bars.find((bar) => x >= bar.x && x <= bar.x + bar.width && y >= bar.y && y <= bar.y + bar.height);
+  return hit?.row || null;
+}
+
+function setupUsageTooltip() {
+  const timelineChart = $("#timelineChart");
+  timelineChart.addEventListener("pointermove", (event) => {
+    const row = timelineRowAt(timelineChart, event);
+    if (row) {
+      showUsageTooltip(row, event);
+      return;
+    }
+    hideUsageTooltip();
+  });
+  timelineChart.addEventListener("pointerleave", hideUsageTooltip);
+
+  document.addEventListener("pointermove", (event) => {
+    if (event.target === timelineChart) {
+      return;
+    }
+    const target = event.target.closest?.("[data-usage-tooltip]");
+    if (!target) {
+      hideUsageTooltip();
+      return;
+    }
+    showUsageTooltip(tooltipRows.get(target), event);
+  });
+  document.addEventListener("pointerleave", hideUsageTooltip);
 }
 
 function renderHomes(homes) {
@@ -379,13 +609,15 @@ function render() {
   if (!summary || !metadata) {
     return;
   }
+  hideUsageTooltip();
   renderMetrics(summary);
   $("#rangeLabel").textContent = rangeLabel(summary);
-  renderBarList($("#channelList"), summary.channels);
+  const channelColors = getChannelColors(summary.channels);
+  renderBarList($("#channelList"), summary.channels, channelColors);
   renderCompactList($("#projectList"), summary.projects);
   renderCompactList($("#modelList"), summary.models);
   renderHomes(metadata.homes || []);
-  drawTimeline($("#timelineChart"), summary.timeline);
+  drawTimeline($("#timelineChart"), summary.timeline, summary.channels, channelColors);
 }
 
 function clockTime(date = new Date()) {
@@ -507,52 +739,60 @@ function refreshViewForFilters() {
   void loadUsage({ skipCheck: true });
 }
 
-$("#presetButtons").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-preset]");
-  if (!button) {
-    return;
-  }
-  state.preset = button.dataset.preset;
-  updatePresetButtons();
-  refreshViewForFilters();
-});
+function bootDashboard() {
+  setupUsageTooltip();
 
-$("#bucketSelect").addEventListener("change", (event) => {
-  state.bucket = event.target.value;
-  refreshViewForFilters();
-});
+  $("#presetButtons").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-preset]");
+    if (!button) {
+      return;
+    }
+    state.preset = button.dataset.preset;
+    updatePresetButtons();
+    refreshViewForFilters();
+  });
 
-$("#startDate").addEventListener("change", (event) => {
-  state.startDate = event.target.value;
-  state.preset = "custom";
-  updatePresetButtons();
-  refreshViewForFilters();
-});
+  $("#bucketSelect").addEventListener("change", (event) => {
+    state.bucket = event.target.value;
+    refreshViewForFilters();
+  });
 
-$("#endDate").addEventListener("change", (event) => {
-  state.endDate = event.target.value;
-  state.preset = "custom";
-  updatePresetButtons();
-  refreshViewForFilters();
-});
+  $("#startDate").addEventListener("change", (event) => {
+    state.startDate = event.target.value;
+    state.preset = "custom";
+    updatePresetButtons();
+    refreshViewForFilters();
+  });
 
-$("#refreshButton").addEventListener("click", () => loadUsage({ force: true }));
-$("#themeToggle").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-theme-option]");
-  if (!button) {
-    return;
-  }
-  setTheme(button.dataset.themeOption);
-});
-window.addEventListener("resize", render);
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    stopAutoRefresh();
-    return;
-  }
-  startAutoRefresh();
-  checkForUpdates();
-});
+  $("#endDate").addEventListener("change", (event) => {
+    state.endDate = event.target.value;
+    state.preset = "custom";
+    updatePresetButtons();
+    refreshViewForFilters();
+  });
 
-setTheme(preferredTheme(), { persist: false });
-loadUsage().then(startAutoRefresh);
+  $("#refreshButton").addEventListener("click", () => loadUsage({ force: true }));
+  $("#themeToggle").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-theme-option]");
+    if (!button) {
+      return;
+    }
+    setTheme(button.dataset.themeOption);
+  });
+  window.addEventListener("resize", render);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopAutoRefresh();
+      return;
+    }
+    startAutoRefresh();
+    checkForUpdates();
+  });
+
+  setTheme(preferredTheme(), { persist: false });
+  loadUsage().then(startAutoRefresh);
+}
+
+if (typeof document !== "undefined") {
+  bootDashboard();
+}

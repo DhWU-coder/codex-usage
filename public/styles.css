@@ -325,6 +325,53 @@ canvas {
   padding: 20px 0;
 }
 
+.usage-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.usage-tooltip[hidden] {
+  display: none;
+}
+
+.usage-tooltip-title {
+  margin-bottom: 8px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.usage-tooltip-subtitle {
+  margin: 9px 0 5px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.usage-tooltip-grid {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 5px 16px;
+}
+
+.usage-tooltip-label {
+  color: var(--muted);
+}
+
+.usage-tooltip-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 @media (max-width: 1020px) {
   .metrics,
   .main-grid,
