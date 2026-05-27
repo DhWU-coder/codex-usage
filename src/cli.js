@@ -11,7 +11,7 @@ import { buildUsageReport, summarizeUsage } from "./usage-core.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3765;
-const DEFAULT_GATEWAY_MEMORY_MB = 32;
+const DEFAULT_GATEWAY_MEMORY_MB = 256;
 const DEFAULT_STATE_FILE = path.join(homedir(), ".codex-usage", "services.json");
 const SERVICE_LOCK_WAIT_MS = 5000;
 const SERVICE_LOCK_STALE_MS = 15000;
@@ -287,6 +287,7 @@ function runServer(args) {
         url,
         cwd: process.cwd(),
         argv: process.argv.slice(1),
+        nodeExecArgv: process.execArgv,
         startedAt: new Date().toISOString(),
       });
       console.log(`Codex Usage dashboard: ${url}`);

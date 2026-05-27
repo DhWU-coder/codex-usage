@@ -169,6 +169,35 @@ test("cli gateway starts a background usage server and returns", async () => {
   }
 });
 
+test("cli gateway uses a safer default heap budget for dashboard refreshes", async () => {
+  const homeDir = await makeFixtureHome();
+  const stateFile = path.join(homeDir, "services.json");
+
+  try {
+    await runCli([
+      "gateway",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--home-dir",
+      homeDir,
+      "--state-file",
+      stateFile,
+    ]);
+
+    const state = JSON.parse(await readFile(stateFile, "utf8"));
+    const service = state.services[0];
+    assert.ok(service, "expected gateway service to be registered");
+    assert.ok(
+      service.nodeExecArgv.includes("--max-old-space-size=256"),
+      `expected gateway Node args to include a 256MB heap budget, got ${JSON.stringify(service.nodeExecArgv)}`,
+    );
+  } finally {
+    await runCli(["stop", "--state-file", stateFile]);
+  }
+});
+
 test("cli restart stops existing services and starts a new gateway", async () => {
   const homeDir = await makeFixtureHome();
   const stateFile = path.join(homeDir, "services.json");

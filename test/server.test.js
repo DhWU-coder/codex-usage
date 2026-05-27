@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createUsageServer } from "../src/server.js";
+import { createUsageServer, isFullDetailHeapAvailable } from "../src/server.js";
 
 function jsonl(rows) {
   return rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
@@ -69,6 +69,11 @@ test("server serves the dashboard and usage API", async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("server keeps full detail reports behind the documented 512MB heap budget", () => {
+  assert.equal(isFullDetailHeapAvailable(511 * 1024 * 1024), false);
+  assert.equal(isFullDetailHeapAvailable(512 * 1024 * 1024), true);
 });
 
 test("server reports status changes and refreshes cached usage reports", async () => {

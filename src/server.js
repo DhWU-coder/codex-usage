@@ -15,7 +15,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
-const MIN_FULL_DETAIL_HEAP_BYTES = 256 * 1024 * 1024;
+const MIN_FULL_DETAIL_HEAP_BYTES = 512 * 1024 * 1024;
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -48,6 +48,10 @@ function requestFilters(url) {
     startDate: url.searchParams.get("startDate") || "",
     endDate: url.searchParams.get("endDate") || "",
   };
+}
+
+export function isFullDetailHeapAvailable(heapSizeLimitBytes = v8.getHeapStatistics().heap_size_limit) {
+  return heapSizeLimitBytes >= MIN_FULL_DETAIL_HEAP_BYTES;
 }
 
 async function serveStatic(requestPath, response) {
@@ -114,7 +118,7 @@ export function createUsageServer(options = {}) {
         const force = url.searchParams.get("force") === "1";
         const detail = url.searchParams.get("detail");
         if (detail === "full") {
-          if (v8.getHeapStatistics().heap_size_limit < MIN_FULL_DETAIL_HEAP_BYTES) {
+          if (!isFullDetailHeapAvailable()) {
             sendJson(response, 413, {
               error:
                 "Full detail report is disabled in low-memory gateway mode. Restart with codex-usage gateway --memory-mb 512, or use npm run export for a static snapshot.",
