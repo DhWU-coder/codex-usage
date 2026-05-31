@@ -14,6 +14,7 @@ It helps you answer questions like: How many tokens did I use today? Which proje
 - Shows time trends by day, week, or month
 - Breaks usage down by channel, project directory, model, and scanned home
 - Provides CLI summaries, an interactive local dashboard, a background gateway, and static HTML snapshots
+- Imports extra Codex homes or project logs generated at `.codex-usage/usage.jsonl`
 - Uses a lightweight fingerprint check and only reparses logs when session files change
 - Designed as a personal local dashboard for long-running Codex usage tracking
 
@@ -24,6 +25,7 @@ Codex Usage currently reads official Codex session logs from:
 - Main Codex/CLI/App home: `~/.codex`
 - JetBrains/PyCharm plugin homes: `~/Library/Caches/JetBrains/*/aia/codex`
 - Extra Codex homes passed through the `CODEX_USAGE_HOMES` environment variable
+- Project usage logs from imported project directories containing `.codex-usage/usage.jsonl`
 
 Channels are classified as:
 
@@ -31,6 +33,7 @@ Channels are classified as:
 - `Codex Exec`
 - `CLI`
 - `JetBrains PyCharm`
+- `Codex OAuth`
 - Other editor integrations when they cannot be classified more specifically
 
 Requests made directly through the OpenAI API are not counted unless they are written to official Codex session logs.
@@ -139,8 +142,30 @@ The web dashboard supports:
 - Model breakdown
 - Scanned home list
 - Light and dark themes saved in local browser storage
+- Directory imports from the top-right button or the scanned home panel
 
 In service mode, the page performs a lightweight check every `60` seconds. The check reads only session file `path + size + mtimeMs` values to build a fingerprint. Full logs are reparsed only when files change or when you click the force rescan button.
+
+## Directory Imports and Project Logs
+
+The dashboard's `导入目录` button and the scanned home panel's `添加` button store imported directories locally:
+
+```text
+~/.codex-usage/imports.json
+```
+
+Imported directories are recognized as either:
+
+- Codex homes containing `sessions/`, `archived_sessions/`, or `state_*.sqlite`
+- Project log directories containing `.codex-usage/usage.jsonl`
+
+For projects that call `codex-oauth` or OpenAI-compatible APIs directly, ask another AI agent to read [log-README.md](log-README.md) from this repository and instrument the target project. The target project should generate:
+
+```text
+<target-project>/.codex-usage/usage.jsonl
+```
+
+Then import `<target-project>` from the dashboard. Project logs should contain token counts, model, timestamp, project path, and session ID only. They should not contain prompts, responses, secrets, or OAuth tokens.
 
 ## Static Export
 
@@ -168,6 +193,9 @@ GET /api/usage
 GET /api/usage?force=1
 GET /api/usage?detail=full
 GET /api/summary
+GET /api/imports
+POST /api/imports
+DELETE /api/imports?path=<absolute-path>
 ```
 
 Endpoint notes:
@@ -177,6 +205,7 @@ Endpoint notes:
 - `/api/usage?force=1` forces a full rescan
 - `/api/usage?detail=full` returns the full `report` for debugging
 - `/api/summary` returns only the summary wrapper
+- `/api/imports` lists, adds, or removes directories imported from the dashboard
 
 The default low-memory `gateway` may reject `detail=full` to avoid excessive memory usage. For full detail debugging, restart with a larger memory limit:
 

@@ -29,4 +29,8 @@ test("renderStaticDashboardHtml embeds usage data and app assets", () => {
   assert.match(html, /role="tooltip"/);
   assert.match(html, /themeToggle/);
   assert.match(html, /data-theme-option="dark"/);
+  assert.match(html, /id="importButton"/);
+  assert.match(html, /id="addImportButton"/);
+  assert.match(html, /id="importDialog"/);
+  assert.match(html, /id="importPath"/);
 });

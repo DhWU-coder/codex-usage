@@ -628,6 +628,71 @@ function setAutoRefreshStatus(message) {
   $("#autoRefreshStatus").textContent = message;
 }
 
+function setImportControlsDisabled(disabled) {
+  for (const selector of ["#importButton", "#addImportButton"]) {
+    const button = $(selector);
+    if (!button) {
+      continue;
+    }
+    button.disabled = disabled;
+    button.title = disabled ? "静态快照不能导入目录" : "";
+  }
+}
+
+function setImportMessage(message, isError = false) {
+  const element = $("#importMessage");
+  element.textContent = message;
+  element.classList.toggle("error", isError);
+}
+
+function openImportDialog() {
+  if (isStaticSnapshot()) {
+    setAutoRefreshStatus("静态快照不能导入目录，请启动本地服务后再导入");
+    return;
+  }
+  const dialog = $("#importDialog");
+  dialog.hidden = false;
+  $("#importPath").value = "";
+  setImportMessage("");
+  window.requestAnimationFrame(() => $("#importPath").focus());
+}
+
+function closeImportDialog() {
+  $("#importDialog").hidden = true;
+  setImportMessage("");
+}
+
+async function submitImportDirectory(event) {
+  event.preventDefault();
+  const importPath = $("#importPath").value.trim();
+  if (!importPath) {
+    setImportMessage("请输入目录路径。", true);
+    return;
+  }
+
+  const submitButton = $("#submitImportButton");
+  submitButton.disabled = true;
+  setImportMessage("正在识别目录...");
+  try {
+    const response = await fetch("/api/imports", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: importPath }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || `API ${response.status}`);
+    }
+    closeImportDialog();
+    setAutoRefreshStatus(`已导入 ${data.import.label}，正在刷新...`);
+    await loadUsage({ force: true });
+  } catch (error) {
+    setImportMessage(`导入失败：${error.message}`, true);
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
 function autoRefreshReadyMessage(checkedAt = new Date()) {
   return `自动刷新 开 · 每 60 秒 · 上次检查 ${clockTime(new Date(checkedAt))}`;
 }
@@ -772,6 +837,21 @@ function bootDashboard() {
   });
 
   $("#refreshButton").addEventListener("click", () => loadUsage({ force: true }));
+  $("#importButton").addEventListener("click", openImportDialog);
+  $("#addImportButton").addEventListener("click", openImportDialog);
+  $("#importForm").addEventListener("submit", submitImportDirectory);
+  $("#cancelImportButton").addEventListener("click", closeImportDialog);
+  $("#closeImportDialogButton").addEventListener("click", closeImportDialog);
+  $("#importDialog").addEventListener("click", (event) => {
+    if (event.target.id === "importDialog") {
+      closeImportDialog();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#importDialog").hidden) {
+      closeImportDialog();
+    }
+  });
   $("#themeToggle").addEventListener("click", (event) => {
     const button = event.target.closest("[data-theme-option]");
     if (!button) {
@@ -790,6 +870,7 @@ function bootDashboard() {
   });
 
   setTheme(preferredTheme(), { persist: false });
+  setImportControlsDisabled(isStaticSnapshot());
   loadUsage().then(startAutoRefresh);
 }
 

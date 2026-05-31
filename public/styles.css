@@ -57,6 +57,11 @@ select {
   font: inherit;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .shell {
   width: min(1440px, calc(100vw - 32px));
   margin: 0 auto;
@@ -112,6 +117,9 @@ label {
 }
 
 #refreshButton,
+#importButton,
+.panel-action,
+.dialog-actions button,
 .theme-toggle button,
 .segmented button {
   border: 1px solid var(--line);
@@ -124,9 +132,23 @@ label {
 }
 
 #refreshButton:hover,
+#importButton:hover,
+.panel-action:hover,
+.dialog-actions button:hover,
 .theme-toggle button:hover,
 .segmented button:hover {
   border-color: var(--control-hover);
+}
+
+#submitImportButton {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--active-ink);
+}
+
+.panel-action {
+  min-height: 30px;
+  padding: 0 10px;
 }
 
 .theme-toggle {
@@ -323,6 +345,70 @@ canvas {
 .empty {
   color: var(--muted);
   padding: 20px 0;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.dialog-backdrop[hidden] {
+  display: none;
+}
+
+.dialog {
+  width: min(520px, 100%);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.dialog-heading,
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-copy,
+.dialog-message {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dialog form {
+  display: grid;
+  gap: 14px;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.dialog-message.error {
+  color: var(--red);
 }
 
 .usage-tooltip {

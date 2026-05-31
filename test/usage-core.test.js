@@ -8,7 +8,9 @@ import {
   buildUsageIndex,
   buildUsageReport,
   buildUsageFingerprint,
+  classifyImportDirectory,
   discoverCodexHomes,
+  discoverUsageSources,
   parseSessionFile,
   summarizeUsage,
   summarizeUsageIndex,
@@ -138,6 +140,80 @@ test("discoverCodexHomes ignores missing extra homes", async () => {
     homes.map((home) => home.label),
     ["Main Codex"],
   );
+});
+
+test("classifyImportDirectory detects project usage logs and Codex homes", async () => {
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "codex-import-kind-"));
+  const projectRoot = path.join(fakeHome, "oauth-project");
+  const codexHome = path.join(fakeHome, "extra-codex");
+  await mkdir(path.join(projectRoot, ".codex-usage"), { recursive: true });
+  await writeFile(path.join(projectRoot, ".codex-usage", "usage.jsonl"), "");
+  await mkdir(path.join(codexHome, "sessions"), { recursive: true });
+
+  const project = await classifyImportDirectory(projectRoot);
+  const home = await classifyImportDirectory(codexHome);
+
+  assert.equal(project.type, "project-log");
+  assert.equal(project.path, projectRoot);
+  assert.equal(project.usageLogPath, path.join(projectRoot, ".codex-usage", "usage.jsonl"));
+  assert.equal(home.type, "codex-home");
+  assert.equal(home.path, codexHome);
+});
+
+test("buildUsageReport and summarizeUsage include imported project usage logs", async () => {
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "codex-project-log-"));
+  const projectRoot = path.join(fakeHome, "openai_codex");
+  const usageDir = path.join(projectRoot, ".codex-usage");
+  await mkdir(path.join(fakeHome, ".codex", "sessions"), { recursive: true });
+  await mkdir(usageDir, { recursive: true });
+  await writeFile(
+    path.join(usageDir, "usage.jsonl"),
+    jsonl([
+      {
+        schema_version: "codex-usage.project-log.v1",
+        timestamp: "2026-05-31T10:00:00.000Z",
+        source: "codex-oauth",
+        channel: "Codex OAuth",
+        project_root: projectRoot,
+        cwd: projectRoot,
+        session_id: "oauth-session-1",
+        request_id: "request-1",
+        model: "gpt-5.5",
+        usage: { total: 120, input: 90, cached: 30, output: 30, reasoning: 8 },
+      },
+      {
+        schema_version: "codex-usage.project-log.v1",
+        timestamp: "2026-05-31T11:00:00.000Z",
+        source: "codex-oauth",
+        project_root: projectRoot,
+        session_id: "oauth-session-1",
+        model: "gpt-5.5",
+        usage: { total: 80, input: 60, cached: 20, output: 20, reasoning: 4 },
+      },
+    ]),
+  );
+
+  const sources = await discoverUsageSources({ homeDir: fakeHome, importDirs: [projectRoot] });
+  const report = await buildUsageReport({ homeDir: fakeHome, importDirs: [projectRoot] });
+  const index = await buildUsageIndex({ homeDir: fakeHome, importDirs: [projectRoot] });
+  const summary = summarizeUsage(report, { preset: "all", bucket: "day" });
+  const indexedSummary = summarizeUsageIndex(index, { preset: "all", bucket: "day" });
+  const fingerprint = await buildUsageFingerprint({ homeDir: fakeHome, importDirs: [projectRoot] });
+
+  assert.deepEqual(
+    sources.map((source) => [source.kind, source.label, source.path]),
+    [
+      ["main", "Main Codex", path.join(fakeHome, ".codex")],
+      ["project-log", "Project openai_codex", projectRoot],
+    ],
+  );
+  assert.equal(report.events.length, 2);
+  assert.equal(report.sessions.length, 1);
+  assert.equal(summary.totals.total, 200);
+  assert.equal(indexedSummary.totals.total, summary.totals.total);
+  assert.deepEqual(summary.channels.map((channel) => [channel.name, channel.total.total]), [["Codex OAuth", 200]]);
+  assert.deepEqual(summary.projects.map((project) => [project.name, project.total.total]), [[projectRoot, 200]]);
+  assert.equal(fingerprint.fileCount, 1);
 });
 
 test("buildUsageFingerprint changes when session files change", async () => {

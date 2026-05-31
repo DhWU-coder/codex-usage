@@ -124,3 +124,58 @@ test("server reports status changes and refreshes cached usage reports", async (
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("server imports project usage log directories and refreshes usage data", async () => {
+  const { homeDir } = await makeFixtureHome();
+  const projectRoot = path.join(homeDir, "openai_codex");
+  const importStoreFile = path.join(homeDir, ".codex-usage", "imports.json");
+  await mkdir(path.join(projectRoot, ".codex-usage"), { recursive: true });
+  await writeFile(
+    path.join(projectRoot, ".codex-usage", "usage.jsonl"),
+    jsonl([
+      {
+        schema_version: "codex-usage.project-log.v1",
+        timestamp: "2026-05-31T12:00:00.000Z",
+        source: "codex-oauth",
+        channel: "Codex OAuth",
+        project_root: projectRoot,
+        cwd: projectRoot,
+        session_id: "oauth-session",
+        model: "gpt-5.5",
+        usage: { total: 77, input: 50, cached: 10, output: 27, reasoning: 6 },
+      },
+    ]),
+  );
+
+  const server = createUsageServer({ homeDir, importStoreFile });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const before = await fetch(`${baseUrl}/api/usage`).then((response) => response.json());
+    const imported = await fetch(`${baseUrl}/api/imports`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: projectRoot }),
+    }).then((response) => response.json());
+    const imports = await fetch(`${baseUrl}/api/imports`).then((response) => response.json());
+    const after = await fetch(`${baseUrl}/api/usage`).then((response) => response.json());
+
+    assert.equal(before.summary.totals.total, 123);
+    assert.equal(imported.import.type, "project-log");
+    assert.equal(imported.import.path, projectRoot);
+    assert.deepEqual(imports.imports.map((entry) => entry.path), [projectRoot]);
+    assert.equal(after.summary.totals.total, 200);
+    assert.deepEqual(
+      after.summary.channels.map((channel) => [channel.name, channel.total.total]),
+      [
+        ["CLI", 123],
+        ["Codex OAuth", 77],
+      ],
+    );
+    assert.equal(after.metadata.homes.some((home) => home.kind === "project-log" && home.path === projectRoot), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

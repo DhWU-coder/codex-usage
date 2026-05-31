@@ -6,6 +6,9 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 const SESSION_DIRS = ["sessions", "archived_sessions"];
+const PROJECT_USAGE_DIR = ".codex-usage";
+const PROJECT_USAGE_FILE = "usage.jsonl";
+const PROJECT_LOG_SCHEMA_VERSION = "codex-usage.project-log.v1";
 const USAGE_FIELDS = [
   "total",
   "input",
@@ -86,6 +89,54 @@ function uniquePaths(paths) {
   return unique;
 }
 
+function optionImportDirs(options = {}) {
+  const env = options.env || process.env;
+  const configured = [];
+  if (Array.isArray(options.importDirs)) {
+    configured.push(...options.importDirs);
+  } else if (typeof options.importDirs === "string") {
+    configured.push(...options.importDirs.split(path.delimiter));
+  }
+  if (env.CODEX_USAGE_IMPORT_DIRS) {
+    configured.push(...env.CODEX_USAGE_IMPORT_DIRS.split(path.delimiter));
+  }
+  return uniquePaths(configured);
+}
+
+export async function classifyImportDirectory(importPath) {
+  const resolved = path.resolve(importPath);
+  if (await codexHomeLooksUsable(resolved)) {
+    return {
+      type: "codex-home",
+      path: resolved,
+    };
+  }
+
+  const directUsageLogPath = path.join(resolved, PROJECT_USAGE_FILE);
+  if (path.basename(resolved) === PROJECT_USAGE_DIR && (await exists(directUsageLogPath))) {
+    return {
+      type: "project-log",
+      path: path.dirname(resolved),
+      usageLogPath: directUsageLogPath,
+    };
+  }
+
+  const usageLogPath = path.join(resolved, PROJECT_USAGE_DIR, PROJECT_USAGE_FILE);
+  if (await exists(usageLogPath)) {
+    return {
+      type: "project-log",
+      path: resolved,
+      usageLogPath,
+    };
+  }
+
+  return {
+    type: "unsupported",
+    path: resolved,
+    reason: `目录需要是 Codex home，或包含 ${PROJECT_USAGE_DIR}/${PROJECT_USAGE_FILE}`,
+  };
+}
+
 function jetBrainsRoots({ homeDir, platform, env }) {
   const roots = [path.join(homeDir, "Library", "Caches", "JetBrains")];
 
@@ -149,6 +200,49 @@ export async function discoverCodexHomes(options = {}) {
   return homes;
 }
 
+export async function discoverUsageSources(options = {}) {
+  const sources = await discoverCodexHomes(options);
+  const seenPaths = new Set(sources.map((source) => source.path));
+  const seenProjectLogs = new Set();
+
+  for (const importDir of optionImportDirs(options)) {
+    const classified = await classifyImportDirectory(importDir);
+    if (classified.type === "codex-home") {
+      if (seenPaths.has(classified.path)) {
+        continue;
+      }
+      seenPaths.add(classified.path);
+      sources.push({
+        id: normalizeId(`extra-${path.basename(classified.path) || "codex"}-${sources.length + 1}`),
+        label: `Imported ${path.basename(classified.path) || classified.path}`,
+        path: classified.path,
+        kind: "extra",
+        imported: true,
+      });
+      continue;
+    }
+
+    if (classified.type !== "project-log") {
+      continue;
+    }
+
+    if (seenProjectLogs.has(classified.usageLogPath)) {
+      continue;
+    }
+    seenProjectLogs.add(classified.usageLogPath);
+    sources.push({
+      id: normalizeId(`project-log-${path.basename(classified.path) || "project"}-${sources.length + 1}`),
+      label: `Project ${path.basename(classified.path) || classified.path}`,
+      path: classified.path,
+      kind: "project-log",
+      usageLogPath: classified.usageLogPath,
+      imported: true,
+    });
+  }
+
+  return sources;
+}
+
 async function walkJsonlFiles(root, files = []) {
   if (!(await exists(root))) {
     return files;
@@ -175,12 +269,18 @@ export async function discoverSessionFiles(homePath) {
 }
 
 export async function buildUsageFingerprint(options = {}) {
-  const homes = options.homes || (await discoverCodexHomes(options));
+  const homes = options.homes || (await discoverUsageSources(options));
   const hash = createHash("sha256");
   let fileCount = 0;
 
   for (const home of homes) {
-    hash.update(`${home.id}\t${home.label}\t${home.path}\n`);
+    hash.update(`${home.id}\t${home.label}\t${home.path}\t${home.kind || ""}\t${home.usageLogPath || ""}\n`);
+    if (home.kind === "project-log" && home.usageLogPath) {
+      const info = await stat(home.usageLogPath);
+      fileCount += 1;
+      hash.update(`${home.usageLogPath}\t${info.size}\t${info.mtimeMs}\n`);
+      continue;
+    }
     const files = await discoverSessionFiles(home.path);
     for (const file of files) {
       const info = await stat(file);
@@ -370,6 +470,120 @@ async function* readJsonlRows(filePath) {
   }
 }
 
+function usageFromProjectLog(raw = {}) {
+  const usage = raw || {};
+  const input = Number(usage.input ?? usage.input_tokens ?? 0);
+  const cached = Number(usage.cached ?? usage.cached_input_tokens ?? 0);
+  const output = Number(usage.output ?? usage.output_tokens ?? 0);
+  const reasoning = Number(usage.reasoning ?? usage.reasoning_output_tokens ?? 0);
+  const total = Number(usage.total ?? usage.total_tokens ?? input + output);
+  return { total, input, cached, output, reasoning };
+}
+
+function projectLogTimestamp(row) {
+  return row.timestamp || row.created_at || row.createdAt || "";
+}
+
+function projectLogSource(row) {
+  return row.source || "project-log";
+}
+
+function projectLogChannel(row) {
+  if (row.channel) {
+    return row.channel;
+  }
+  return projectLogSource(row) === "codex-oauth" ? "Codex OAuth" : "Project Log";
+}
+
+function projectLogUsage(row) {
+  return usageFromProjectLog(row.usage || row.token_usage || row.total_token_usage || {});
+}
+
+function projectLogSessionId(row, source, rowNumber) {
+  return row.session_id || row.sessionId || row.request_id || row.requestId || `${source.id}:${rowNumber}`;
+}
+
+function isSupportedProjectLogRow(row) {
+  return !row.schema_version || row.schema_version === PROJECT_LOG_SCHEMA_VERSION;
+}
+
+async function parseProjectUsageLogFile(filePath, source) {
+  const sessions = new Map();
+  const events = [];
+  let rowNumber = 0;
+
+  for await (const row of readJsonlRows(filePath)) {
+    rowNumber += 1;
+    if (!isSupportedProjectLogRow(row)) {
+      continue;
+    }
+    const timestamp = projectLogTimestamp(row);
+    const time = Date.parse(timestamp);
+    if (!Number.isFinite(time)) {
+      continue;
+    }
+    const usage = projectLogUsage(row);
+    if (isZeroUsage(usage)) {
+      continue;
+    }
+
+    const sessionId = projectLogSessionId(row, source, rowNumber);
+    const sourceName = projectLogSource(row);
+    const channel = projectLogChannel(row);
+    const cwd = row.cwd || row.project_root || row.projectRoot || source.path;
+    const model = row.model || "Unknown model";
+    const event = {
+      id: row.event_id || row.eventId || row.request_id || row.requestId || `${sessionId}:${events.length + 1}`,
+      sessionId,
+      timestamp,
+      homeId: source.id,
+      homeLabel: source.label,
+      homePath: source.path,
+      channel,
+      source: sourceName,
+      originator: "",
+      cwd,
+      model,
+      total: usage,
+    };
+    events.push(event);
+
+    const session = sessions.get(sessionId) || {
+      id: sessionId,
+      filePath,
+      firstAt: timestamp,
+      lastAt: timestamp,
+      homeId: source.id,
+      homeLabel: source.label,
+      homePath: source.path,
+      channel,
+      source: sourceName,
+      originator: "",
+      cwd,
+      model,
+      cliVersion: "",
+      modelProvider: "",
+      eventCount: 0,
+      total: emptyUsage(),
+    };
+    if (time < Date.parse(session.firstAt)) {
+      session.firstAt = timestamp;
+    }
+    if (time > Date.parse(session.lastAt)) {
+      session.lastAt = timestamp;
+    }
+    session.eventCount += 1;
+    session.model = model;
+    addUsage(session.total, usage);
+    sessions.set(sessionId, session);
+  }
+
+  return {
+    sessions: [...sessions.values()],
+    events,
+  };
+}
+
 function createStringInterner() {
   const values = [];
   const ids = new Map();
@@ -465,13 +679,62 @@ async function parseSessionFileForIndex(filePath, home, intern) {
   return events;
 }
 
+async function parseProjectUsageLogFileForIndex(filePath, source, intern) {
+  const events = [];
+  let rowNumber = 0;
+
+  for await (const row of readJsonlRows(filePath)) {
+    rowNumber += 1;
+    if (!isSupportedProjectLogRow(row)) {
+      continue;
+    }
+    const timestamp = projectLogTimestamp(row);
+    const time = Date.parse(timestamp);
+    if (!Number.isFinite(time)) {
+      continue;
+    }
+    const usage = projectLogUsage(row);
+    if (isZeroUsage(usage)) {
+      continue;
+    }
+
+    events.push({
+      t: time,
+      s: intern(projectLogSessionId(row, source, rowNumber)),
+      h: intern(source.id),
+      l: intern(source.label),
+      c: intern(projectLogChannel(row)),
+      p: intern(row.cwd || row.project_root || row.projectRoot || source.path),
+      m: intern(row.model || "Unknown model"),
+      total: usage.total,
+      input: usage.input,
+      cached: usage.cached,
+      output: usage.output,
+      reasoning: usage.reasoning,
+    });
+  }
+
+  return events;
+}
+
 export async function buildUsageReport(options = {}) {
-  const homes = options.homes || (await discoverCodexHomes(options));
+  const homes = options.homes || (await discoverUsageSources(options));
   const sessions = [];
   const events = [];
   const warnings = [];
 
   for (const home of homes) {
+    if (home.kind === "project-log" && home.usageLogPath) {
+      try {
+        const parsed = await parseProjectUsageLogFile(home.usageLogPath, home);
+        sessions.push(...parsed.sessions);
+        events.push(...parsed.events);
+      } catch (error) {
+        warnings.push(`无法解析 ${home.usageLogPath}: ${error.message}`);
+      }
+      continue;
+    }
+
     let files = [];
     try {
       files = await discoverSessionFiles(home.path);
@@ -507,12 +770,21 @@ export async function buildUsageReport(options = {}) {
 }
 
 export async function buildUsageIndex(options = {}) {
-  const homes = options.homes || (await discoverCodexHomes(options));
+  const homes = options.homes || (await discoverUsageSources(options));
   const warnings = [];
   const events = [];
   const interner = createStringInterner();
 
   for (const home of homes) {
+    if (home.kind === "project-log" && home.usageLogPath) {
+      try {
+        events.push(...(await parseProjectUsageLogFileForIndex(home.usageLogPath, home, interner.intern)));
+      } catch (error) {
+        warnings.push(`无法解析 ${home.usageLogPath}: ${error.message}`);
+      }
+      continue;
+    }
+
     let files = [];
     try {
       files = await discoverSessionFiles(home.path);

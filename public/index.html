@@ -30,6 +30,7 @@
             <button type="button" data-theme-option="light">浅色</button>
             <button type="button" data-theme-option="dark">深色</button>
           </div>
+          <button id="importButton" type="button">导入目录</button>
           <button id="refreshButton" type="button">强制重扫</button>
         </div>
       </header>
@@ -129,10 +130,31 @@
       <section class="panel homes-panel">
         <div class="panel-heading">
           <h2>扫描目录</h2>
+          <button id="addImportButton" class="panel-action" type="button">添加</button>
         </div>
         <div id="homeList" class="home-list"></div>
       </section>
     </main>
+    <div id="importDialog" class="dialog-backdrop" hidden>
+      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="importDialogTitle">
+        <form id="importForm">
+          <div class="dialog-heading">
+            <h2 id="importDialogTitle">导入目录</h2>
+            <button id="closeImportDialogButton" class="icon-button" type="button" aria-label="关闭">×</button>
+          </div>
+          <p class="dialog-copy">支持 Codex home，或包含 .codex-usage/usage.jsonl 的项目目录。</p>
+          <label>
+            目录路径
+            <input id="importPath" type="text" autocomplete="off" placeholder="/Users/you/project/openai_codex" />
+          </label>
+          <p id="importMessage" class="dialog-message" role="status"></p>
+          <div class="dialog-actions">
+            <button id="cancelImportButton" type="button">取消</button>
+            <button id="submitImportButton" type="submit">导入</button>
+          </div>
+        </form>
+      </section>
+    </div>
     <div id="usageTooltip" class="usage-tooltip" role="tooltip" hidden></div>
 
     <script src="/app.js" type="module"></script>

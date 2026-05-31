@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8 from "node:v8";
@@ -8,6 +9,7 @@ import {
   buildUsageFingerprint,
   buildUsageIndex,
   buildUsageReport,
+  classifyImportDirectory,
   summarizeUsage,
   summarizeUsageIndex,
   usageIndexMetadata,
@@ -16,6 +18,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
 const MIN_FULL_DETAIL_HEAP_BYTES = 512 * 1024 * 1024;
+const DEFAULT_IMPORT_STORE_FILE = path.join(os.homedir(), ".codex-usage", "imports.json");
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -54,6 +57,99 @@ export function isFullDetailHeapAvailable(heapSizeLimitBytes = v8.getHeapStatist
   return heapSizeLimitBytes >= MIN_FULL_DETAIL_HEAP_BYTES;
 }
 
+function configuredImportDirs(options = {}) {
+  if (Array.isArray(options.importDirs)) {
+    return options.importDirs;
+  }
+  if (typeof options.importDirs === "string") {
+    return options.importDirs.split(path.delimiter).filter(Boolean);
+  }
+  return [];
+}
+
+function importStoreFile(options = {}) {
+  return options.importStoreFile || DEFAULT_IMPORT_STORE_FILE;
+}
+
+function normalizeImportEntries(entries = []) {
+  const seen = new Set();
+  const normalized = [];
+  for (const entry of entries) {
+    const rawPath = typeof entry === "string" ? entry : entry?.path;
+    if (!rawPath) {
+      continue;
+    }
+    const resolved = path.resolve(rawPath);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    normalized.push({ path: resolved });
+  }
+  return normalized;
+}
+
+async function readImportEntries(options = {}) {
+  try {
+    const text = await readFile(importStoreFile(options), "utf8");
+    const parsed = JSON.parse(text);
+    return normalizeImportEntries(Array.isArray(parsed) ? parsed : parsed.imports);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeImportEntries(options, entries) {
+  const filePath = importStoreFile(options);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify({ imports: normalizeImportEntries(entries) }, null, 2) + "\n");
+}
+
+async function describeImportEntry(importPath) {
+  const classified = await classifyImportDirectory(importPath);
+  if (classified.type === "unsupported") {
+    return classified;
+  }
+  return {
+    type: classified.type,
+    path: classified.path,
+    label:
+      classified.type === "project-log"
+        ? `Project ${path.basename(classified.path) || classified.path}`
+        : `Imported ${path.basename(classified.path) || classified.path}`,
+    ...(classified.usageLogPath ? { usageLogPath: classified.usageLogPath } : {}),
+  };
+}
+
+async function listImportEntries(options = {}) {
+  const storedEntries = await readImportEntries(options);
+  const described = [];
+  for (const entry of storedEntries) {
+    described.push(await describeImportEntry(entry.path));
+  }
+  return described.filter((entry) => entry.type !== "unsupported");
+}
+
+async function usageOptions(options = {}) {
+  const storedEntries = await readImportEntries(options);
+  const importDirs = [...configuredImportDirs(options), ...storedEntries.map((entry) => entry.path)];
+  return { ...options, importDirs };
+}
+
+async function readJsonBody(request) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 16_384) {
+      throw new Error("Request body too large");
+    }
+  }
+  return body ? JSON.parse(body) : {};
+}
+
 async function serveStatic(requestPath, response) {
   const normalized = requestPath === "/" ? "/index.html" : requestPath;
   const filePath = path.resolve(PUBLIC_DIR, `.${decodeURIComponent(normalized)}`);
@@ -78,6 +174,7 @@ export function createUsageServer(options = {}) {
   let cache = null;
 
   async function loadUsageIndex({ force = false, check = true } = {}) {
+    const currentUsageOptions = await usageOptions(options);
     if (!force && !check && cache) {
       return {
         fingerprint: cache.fingerprint,
@@ -86,11 +183,11 @@ export function createUsageServer(options = {}) {
       };
     }
 
-    const status = await buildUsageFingerprint(options);
+    const status = await buildUsageFingerprint(currentUsageOptions);
     if (force || !cache || cache.fingerprint !== status.fingerprint) {
       cache = {
         fingerprint: status.fingerprint,
-        index: await buildUsageIndex(options),
+        index: await buildUsageIndex(currentUsageOptions),
       };
     }
     return {
@@ -104,13 +201,53 @@ export function createUsageServer(options = {}) {
 
     try {
       if (url.pathname === "/api/status") {
-        const status = await buildUsageFingerprint(options);
+        const status = await buildUsageFingerprint(await usageOptions(options));
         const since = url.searchParams.get("since") || "";
         sendJson(response, 200, {
           fingerprint: status.fingerprint,
           changed: since ? status.fingerprint !== since : true,
           checkedAt: status.checkedAt,
         });
+        return;
+      }
+
+      if (url.pathname === "/api/imports") {
+        if (request.method === "GET") {
+          sendJson(response, 200, { imports: await listImportEntries(options) });
+          return;
+        }
+
+        if (request.method === "POST") {
+          const body = await readJsonBody(request);
+          if (!body.path) {
+            sendJson(response, 400, { error: "Missing import directory path." });
+            return;
+          }
+          const entry = await describeImportEntry(body.path);
+          if (entry.type === "unsupported") {
+            sendJson(response, 400, { error: entry.reason, path: entry.path });
+            return;
+          }
+          const entries = normalizeImportEntries([...(await readImportEntries(options)), entry]);
+          await writeImportEntries(options, entries);
+          cache = null;
+          sendJson(response, 200, {
+            import: entry,
+            imports: await listImportEntries(options),
+          });
+          return;
+        }
+
+        if (request.method === "DELETE") {
+          const targetPath = path.resolve(url.searchParams.get("path") || "");
+          const entries = (await readImportEntries(options)).filter((entry) => entry.path !== targetPath);
+          await writeImportEntries(options, entries);
+          cache = null;
+          sendJson(response, 200, { imports: await listImportEntries(options) });
+          return;
+        }
+
+        sendJson(response, 405, { error: "Method not allowed" });
         return;
       }
 
@@ -126,8 +263,9 @@ export function createUsageServer(options = {}) {
             return;
           }
 
-          const status = await buildUsageFingerprint(options);
-          const report = await buildUsageReport(options);
+          const currentUsageOptions = await usageOptions(options);
+          const status = await buildUsageFingerprint(currentUsageOptions);
+          const report = await buildUsageReport(currentUsageOptions);
           sendJson(response, 200, {
             fingerprint: status.fingerprint,
             checkedAt: status.checkedAt,
