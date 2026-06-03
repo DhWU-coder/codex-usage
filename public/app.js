@@ -786,12 +786,6 @@ function updateRecentControls() {
   if (recentValue && recentValue.value !== state.recentValue) {
     recentValue.value = state.recentValue;
   }
-  const recentPresetSelect = $("#recentPresetSelect");
-  if (!recentPresetSelect) {
-    return;
-  }
-  const hasOption = [...recentPresetSelect.options].some((option) => option.value === state.recentValue);
-  recentPresetSelect.value = hasOption ? state.recentValue : "";
 }
 
 function usageQuery({ force = false, skipCheck = false } = {}) {
@@ -933,14 +927,6 @@ function bootDashboard() {
 
   $("#recentValue").addEventListener("change", (event) => {
     state.recentValue = event.target.value.trim();
-    state.preset = "recent";
-    updatePresetButtons();
-    updateRecentControls();
-    refreshViewForFilters();
-  });
-
-  $("#recentPresetSelect").addEventListener("change", (event) => {
-    state.recentValue = event.target.value;
     state.preset = "recent";
     updatePresetButtons();
     updateRecentControls();

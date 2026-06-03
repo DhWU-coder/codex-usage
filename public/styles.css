@@ -197,13 +197,7 @@ label {
 }
 
 .recent-range {
-  min-width: 220px;
-}
-
-.recent-control {
-  display: grid;
-  grid-template-columns: minmax(82px, 1fr) minmax(104px, auto);
-  gap: 6px;
+  min-width: 180px;
 }
 
 label {
