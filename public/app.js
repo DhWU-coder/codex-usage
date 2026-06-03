@@ -246,8 +246,16 @@ function subtractMonthsClamped(date, months) {
   );
 }
 
-function parseRecentValue(value) {
+export function normalizeRecentValue(value) {
   const normalized = String(value || "").trim().replace(/\s+/g, "");
+  if (/^[1-9]\d*$/.test(normalized)) {
+    return `${normalized}天`;
+  }
+  return normalized;
+}
+
+function parseRecentValue(value) {
+  const normalized = normalizeRecentValue(value);
   if (normalized === "半年") {
     return { months: 6 };
   }
@@ -786,6 +794,32 @@ function updateRecentControls() {
   if (recentValue && recentValue.value !== state.recentValue) {
     recentValue.value = state.recentValue;
   }
+  for (const option of document.querySelectorAll("[data-recent-option]")) {
+    option.setAttribute("aria-selected", String(option.dataset.recentOption === state.recentValue));
+  }
+}
+
+function setRecentMenuOpen(open) {
+  const menu = $("#recentRangeMenu");
+  const input = $("#recentValue");
+  const button = $("#recentMenuButton");
+  const segment = document.querySelector(".recent-segment");
+  if (!menu || !input || !button || !segment) {
+    return;
+  }
+  menu.hidden = !open;
+  input.setAttribute("aria-expanded", String(open));
+  button.setAttribute("aria-expanded", String(open));
+  segment.classList.toggle("menu-open", open);
+}
+
+function activateRecentValue(value) {
+  state.recentValue = normalizeRecentValue(value);
+  state.preset = "recent";
+  updatePresetButtons();
+  updateRecentControls();
+  setRecentMenuOpen(false);
+  refreshViewForFilters();
 }
 
 function usageQuery({ force = false, skipCheck = false } = {}) {
@@ -926,11 +960,45 @@ function bootDashboard() {
   });
 
   $("#recentValue").addEventListener("change", (event) => {
-    state.recentValue = event.target.value.trim();
+    activateRecentValue(event.target.value);
+  });
+
+  $("#recentValue").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    activateRecentValue(event.target.value);
+  });
+
+  $("#recentValue").addEventListener("focus", () => {
     state.preset = "recent";
     updatePresetButtons();
-    updateRecentControls();
-    refreshViewForFilters();
+    setRecentMenuOpen(true);
+  });
+
+  $("#recentMenuButton").addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.preset = "recent";
+    updatePresetButtons();
+    const shouldOpen = $("#recentRangeMenu").hidden;
+    $("#recentValue").focus();
+    setRecentMenuOpen(shouldOpen);
+  });
+
+  $("#recentRangeMenu").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-recent-option]");
+    if (!option) {
+      return;
+    }
+    event.stopPropagation();
+    activateRecentValue(option.dataset.recentOption);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".recent-segment")) {
+      setRecentMenuOpen(false);
+    }
   });
 
   $("#refreshButton").addEventListener("click", () => loadUsage({ force: true }));
@@ -945,6 +1013,9 @@ function bootDashboard() {
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setRecentMenuOpen(false);
+    }
     if (event.key === "Escape" && !$("#importDialog").hidden) {
       closeImportDialog();
     }

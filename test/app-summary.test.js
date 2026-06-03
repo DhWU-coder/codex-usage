@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { setSummaryFilters, summarize, timelineChannelSegments } from "../public/app.js";
+import { normalizeRecentValue, setSummaryFilters, summarize, timelineChannelSegments } from "../public/app.js";
 
 test("summarize includes channel breakdowns for timeline buckets", () => {
   const summary = summarize({
@@ -73,6 +73,13 @@ test("summarize filters recent natural month ranges", () => {
       endDate: "",
     });
   }
+});
+
+test("normalizeRecentValue defaults bare numbers to days", () => {
+  assert.equal(normalizeRecentValue("7"), "7天");
+  assert.equal(normalizeRecentValue(" 14 "), "14天");
+  assert.equal(normalizeRecentValue("1个月"), "1个月");
+  assert.equal(normalizeRecentValue("半年"), "半年");
 });
 
 test("timelineChannelSegments follows global channel order", () => {

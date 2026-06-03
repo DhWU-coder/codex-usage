@@ -217,22 +217,131 @@ select {
 .segmented .recent-segment {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 6px 0 12px;
+  gap: 10px;
+  padding: 0 10px 0 14px;
+  position: relative;
+}
+
+.segmented .recent-segment .recent-segment-label {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
 }
 
 .recent-segment-input {
-  width: 78px;
-  height: 28px;
-  min-height: 28px;
-  border-radius: 4px;
-  background: var(--panel);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
-  padding: 0 6px;
+  padding: 0 30px 0 10px;
+  outline: 0;
 }
 
-.recent-segment.active .recent-segment-input {
+.recent-combobox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 112px;
+  height: 26px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control);
+  color: var(--ink);
+}
+
+.recent-combobox:focus-within {
   border-color: var(--control-hover);
+}
+
+.segmented .recent-menu-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.segmented .recent-menu-button::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 5px solid currentColor;
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+}
+
+.segmented .recent-menu-button:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+}
+
+.recent-segment.active .recent-combobox {
+  border-color: var(--line);
+}
+
+.segmented .recent-segment.active .recent-menu-button {
+  color: var(--ink);
+}
+
+.recent-range-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  right: 4px;
+  display: grid;
+  gap: 2px;
+  width: 112px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control);
+  box-shadow:
+    0 14px 34px rgba(31, 41, 51, 0.14),
+    0 2px 8px rgba(31, 41, 51, 0.08);
+}
+
+.recent-range-menu[hidden] {
+  display: none;
+}
+
+.recent-range-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+}
+
+.recent-range-menu button:hover,
+.recent-range-menu button:focus-visible {
+  background: var(--track);
+  border-color: transparent;
+  outline: 0;
+}
+
+.recent-range-menu button[aria-selected="true"] {
+  background: var(--track);
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .metrics {

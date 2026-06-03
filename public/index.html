@@ -43,26 +43,40 @@
             <button type="button" data-preset="week">本周</button>
             <button type="button" data-preset="month">本月</button>
             <button type="button" data-preset="all" class="active">全部</button>
-            <label class="recent-segment" data-preset="recent">
-              <span>最近</span>
-              <input
-                id="recentValue"
-                class="recent-segment-input"
-                type="text"
-                list="recentRangeOptions"
-                value="1个月"
-                autocomplete="off"
-                aria-label="最近范围"
-              />
-              <datalist id="recentRangeOptions">
-                <option value="1天"></option>
-                <option value="1周"></option>
-                <option value="1个月"></option>
-                <option value="3个月"></option>
-                <option value="半年"></option>
-                <option value="一年"></option>
-              </datalist>
-            </label>
+            <div class="recent-segment" data-preset="recent">
+              <span class="recent-segment-label">最近</span>
+              <span class="recent-combobox">
+                <input
+                  id="recentValue"
+                  class="recent-segment-input"
+                  type="text"
+                  value="1个月"
+                  autocomplete="off"
+                  aria-label="最近范围"
+                  aria-controls="recentRangeMenu"
+                  aria-expanded="false"
+                  aria-haspopup="listbox"
+                />
+                <button
+                  id="recentMenuButton"
+                  class="recent-menu-button"
+                  type="button"
+                  aria-label="展开最近范围选项"
+                  aria-controls="recentRangeMenu"
+                  aria-expanded="false"
+                >
+                </button>
+              </span>
+              <div id="recentRangeMenu" class="recent-range-menu" role="listbox" hidden>
+                <button type="button" role="option" data-recent-option="1天" aria-selected="false">1天</button>
+                <button type="button" role="option" data-recent-option="1周" aria-selected="false">1周</button>
+                <button type="button" role="option" data-recent-option="1个月" aria-selected="true">1个月</button>
+                <button type="button" role="option" data-recent-option="2个月" aria-selected="false">2个月</button>
+                <button type="button" role="option" data-recent-option="3个月" aria-selected="false">3个月</button>
+                <button type="button" role="option" data-recent-option="半年" aria-selected="false">半年</button>
+                <button type="button" role="option" data-recent-option="一年" aria-selected="false">一年</button>
+              </div>
+            </div>
             <button type="button" data-preset="custom">自定义</button>
           </div>
         </div>
