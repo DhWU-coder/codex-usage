@@ -47,6 +47,47 @@ function tokenRow(timestamp, total, input = total - 10, cached = 0, output = 10)
   };
 }
 
+function usageEvent(timestamp, total) {
+  return {
+    timestamp,
+    sessionId: `session-${total}`,
+    channel: "CLI",
+    homeId: "main-codex",
+    homeLabel: "Main Codex",
+    cwd: "/work/project",
+    model: "gpt-5.5",
+    total: { total, input: total, cached: 0, output: 0, reasoning: 0 },
+  };
+}
+
+function indexedUsageEvent(timestamp, total) {
+  return {
+    t: new Date(timestamp).getTime(),
+    s: total,
+    h: 0,
+    c: 1,
+    l: 2,
+    m: 3,
+    p: 4,
+    total,
+    input: total,
+    cached: 0,
+    output: 0,
+    reasoning: 0,
+  };
+}
+
+function usageIndex(events) {
+  return {
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    homes: [],
+    warnings: [],
+    strings: ["main-codex", "CLI", "Main Codex", "gpt-5.5", "/work/project"],
+    events: events.map((event) => indexedUsageEvent(event.timestamp, event.total.total)),
+    sessionCount: events.length,
+  };
+}
+
 test("parseSessionFile derives incremental token events from cumulative totals", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "codex-usage-"));
   const file = path.join(root, "rollout.jsonl");
@@ -158,6 +199,58 @@ test("classifyImportDirectory detects project usage logs and Codex homes", async
   assert.equal(project.usageLogPath, path.join(projectRoot, ".codex-usage", "usage.jsonl"));
   assert.equal(home.type, "codex-home");
   assert.equal(home.path, codexHome);
+});
+
+test("summarizeUsage filters recent natural month ranges", () => {
+  const events = [
+    usageEvent("2026-05-02T12:00:00", 100),
+    usageEvent("2026-05-03T00:00:00", 200),
+    usageEvent("2026-06-03T12:00:00", 300),
+  ];
+  const report = { generatedAt: "2026-06-03T00:00:00.000Z", events };
+  const filters = {
+    preset: "recent",
+    recentValue: "1个月",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  };
+
+  const summary = summarizeUsage(report, filters);
+  const indexedSummary = summarizeUsageIndex(usageIndex(events), filters);
+
+  assert.equal(summary.totals.total, 500);
+  assert.equal(indexedSummary.totals.total, 500);
+});
+
+test("summarizeUsage filters recent half-year and manual day ranges", () => {
+  const halfYearEvents = [
+    usageEvent("2025-12-02T12:00:00", 100),
+    usageEvent("2025-12-03T00:00:00", 200),
+    usageEvent("2026-06-03T12:00:00", 300),
+  ];
+  const manualDayEvents = [
+    usageEvent("2026-05-19T12:00:00", 10),
+    usageEvent("2026-05-20T00:00:00", 20),
+    usageEvent("2026-06-03T12:00:00", 30),
+  ];
+
+  const halfYearFilters = {
+    preset: "recent",
+    recentValue: "半年",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  };
+  const manualDayFilters = {
+    preset: "recent",
+    recentValue: "14天",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  };
+
+  assert.equal(summarizeUsage({ generatedAt: "", events: halfYearEvents }, halfYearFilters).totals.total, 500);
+  assert.equal(summarizeUsageIndex(usageIndex(halfYearEvents), halfYearFilters).totals.total, 500);
+  assert.equal(summarizeUsage({ generatedAt: "", events: manualDayEvents }, manualDayFilters).totals.total, 50);
+  assert.equal(summarizeUsageIndex(usageIndex(manualDayEvents), manualDayFilters).totals.total, 50);
 });
 
 test("buildUsageReport and summarizeUsage include imported project usage logs", async () => {

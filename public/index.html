@@ -42,9 +42,26 @@
             <button type="button" data-preset="today">今日</button>
             <button type="button" data-preset="week">本周</button>
             <button type="button" data-preset="month">本月</button>
+            <button type="button" data-preset="recent">最近</button>
             <button type="button" data-preset="all" class="active">全部</button>
             <button type="button" data-preset="custom">自定义</button>
           </div>
+        </div>
+        <div class="control-group recent-range">
+          <label>
+            最近
+            <span class="recent-control">
+              <input id="recentValue" type="text" value="1个月" autocomplete="off" />
+              <select id="recentPresetSelect" aria-label="最近范围快速选择">
+                <option value="1天">1天</option>
+                <option value="1周">1周</option>
+                <option value="1个月" selected>1个月</option>
+                <option value="3个月">3个月</option>
+                <option value="半年">半年</option>
+                <option value="一年">一年</option>
+              </select>
+            </span>
+          </label>
         </div>
         <div class="control-group custom-range">
           <label>

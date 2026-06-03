@@ -54,12 +54,17 @@ test("server serves the dashboard and usage API", async () => {
     const baseUrl = `http://127.0.0.1:${port}`;
     const page = await fetch(`${baseUrl}/`);
     const api = await fetch(`${baseUrl}/api/usage`);
+    const recent = await fetch(`${baseUrl}/api/usage?preset=recent&recentValue=${encodeURIComponent("14天")}`);
     const json = await api.json();
+    const recentJson = await recent.json();
 
     assert.equal(page.status, 200);
     assert.match(await page.text(), /Codex Usage/);
     assert.equal(api.status, 200);
     assert.equal(json.summary.totals.total, 123);
+    assert.equal(recent.status, 200);
+    assert.equal(recentJson.summary.range.preset, "recent");
+    assert.equal(recentJson.summary.totals.total, 0);
     assert.equal(json.metadata.eventCount, 1);
     assert.equal(json.metadata.sessionCount, 1);
     assert.equal(json.report, undefined);

@@ -196,6 +196,16 @@ label {
   grid-template-columns: repeat(2, minmax(130px, 1fr));
 }
 
+.recent-range {
+  min-width: 220px;
+}
+
+.recent-control {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) minmax(104px, auto);
+  gap: 6px;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -486,6 +496,10 @@ canvas {
   .wide-grid,
   .custom-range {
     grid-template-columns: 1fr;
+  }
+
+  .recent-range {
+    min-width: 0;
   }
 
   .metric strong {

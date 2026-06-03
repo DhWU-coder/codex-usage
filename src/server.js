@@ -50,6 +50,7 @@ function requestFilters(url) {
     bucket: url.searchParams.get("bucket") || "day",
     startDate: url.searchParams.get("startDate") || "",
     endDate: url.searchParams.get("endDate") || "",
+    recentValue: url.searchParams.get("recentValue") || "",
   };
 }
 

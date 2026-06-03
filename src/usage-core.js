@@ -848,6 +848,66 @@ function parseDateEnd(value) {
   return value ? new Date(`${value}T23:59:59.999`) : null;
 }
 
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function subtractMonthsClamped(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() - months, 1);
+  const day = Math.min(date.getDate(), daysInMonth(target.getFullYear(), target.getMonth()));
+  return new Date(
+    target.getFullYear(),
+    target.getMonth(),
+    day,
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+  );
+}
+
+function parseRecentValue(value) {
+  const normalized = String(value || "").trim().replace(/\s+/g, "");
+  if (normalized === "半年") {
+    return { months: 6 };
+  }
+  if (normalized === "一年") {
+    return { months: 12 };
+  }
+  const dayMatch = normalized.match(/^([1-9]\d*)天$/);
+  if (dayMatch) {
+    return { days: Number(dayMatch[1]) };
+  }
+  const weekMatch = normalized.match(/^([1-9]\d*)周$/);
+  if (weekMatch) {
+    return { days: Number(weekMatch[1]) * 7 };
+  }
+  const monthMatch = normalized.match(/^([1-9]\d*)个月$/);
+  if (monthMatch) {
+    return { months: Number(monthMatch[1]) };
+  }
+  const yearMatch = normalized.match(/^([1-9]\d*)年$/);
+  if (yearMatch) {
+    return { months: Number(yearMatch[1]) * 12 };
+  }
+  return null;
+}
+
+function recentDateRange(value, now) {
+  const parsed = parseRecentValue(value);
+  if (!parsed) {
+    return null;
+  }
+  const start = parsed.days
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - parsed.days)
+    : subtractMonthsClamped(now, parsed.months);
+  return {
+    start: startOfLocalDay(start),
+    end: endOfLocalDay(now),
+    preset: "recent",
+  };
+}
+
 export function resolveDateRange(filters = {}, events = []) {
   const now = filters.now ? new Date(filters.now) : new Date();
   const preset = filters.preset || "all";
@@ -870,6 +930,12 @@ export function resolveDateRange(filters = {}, events = []) {
       end: parseDateEnd(filters.endDate),
       preset,
     };
+  }
+  if (preset === "recent") {
+    const range = recentDateRange(filters.recentValue, now);
+    if (range) {
+      return range;
+    }
   }
 
   const dates = events
@@ -972,6 +1038,12 @@ function indexDateRange(filters = {}, events = []) {
       end: parseDateEnd(filters.endDate),
       preset,
     };
+  }
+  if (preset === "recent") {
+    const range = recentDateRange(filters.recentValue, now);
+    if (range) {
+      return range;
+    }
   }
 
   const timestamps = events.map((event) => event.t).filter(Number.isFinite);

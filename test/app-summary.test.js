@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { summarize, timelineChannelSegments } from "../public/app.js";
+import { setSummaryFilters, summarize, timelineChannelSegments } from "../public/app.js";
 
 test("summarize includes channel breakdowns for timeline buckets", () => {
   const summary = summarize({
@@ -28,6 +28,51 @@ test("summarize includes channel breakdowns for timeline buckets", () => {
       ["CLI", 100],
     ],
   );
+});
+
+test("summarize filters recent natural month ranges", () => {
+  setSummaryFilters({
+    preset: "recent",
+    recentValue: "1个月",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-05-02T12:00:00",
+          sessionId: "old",
+          channel: "CLI",
+          total: { total: 100, input: 100, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-05-03T00:00:00",
+          sessionId: "boundary",
+          channel: "CLI",
+          total: { total: 200, input: 200, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-03T12:00:00",
+          sessionId: "current",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.equal(summary.totals.total, 500);
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
 });
 
 test("timelineChannelSegments follows global channel order", () => {

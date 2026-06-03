@@ -7,6 +7,8 @@ const state = {
   bucket: "day",
   startDate: "",
   endDate: "",
+  recentValue: "1个月",
+  now: null,
   autoRefreshTimer: null,
   theme: "light",
 };
@@ -226,6 +228,65 @@ function endOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 }
 
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function subtractMonthsClamped(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() - months, 1);
+  const day = Math.min(date.getDate(), daysInMonth(target.getFullYear(), target.getMonth()));
+  return new Date(
+    target.getFullYear(),
+    target.getMonth(),
+    day,
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+  );
+}
+
+function parseRecentValue(value) {
+  const normalized = String(value || "").trim().replace(/\s+/g, "");
+  if (normalized === "半年") {
+    return { months: 6 };
+  }
+  if (normalized === "一年") {
+    return { months: 12 };
+  }
+  const dayMatch = normalized.match(/^([1-9]\d*)天$/);
+  if (dayMatch) {
+    return { days: Number(dayMatch[1]) };
+  }
+  const weekMatch = normalized.match(/^([1-9]\d*)周$/);
+  if (weekMatch) {
+    return { days: Number(weekMatch[1]) * 7 };
+  }
+  const monthMatch = normalized.match(/^([1-9]\d*)个月$/);
+  if (monthMatch) {
+    return { months: Number(monthMatch[1]) };
+  }
+  const yearMatch = normalized.match(/^([1-9]\d*)年$/);
+  if (yearMatch) {
+    return { months: Number(yearMatch[1]) * 12 };
+  }
+  return null;
+}
+
+function recentDateRange(value, now) {
+  const parsed = parseRecentValue(value);
+  if (!parsed) {
+    return null;
+  }
+  const start = parsed.days
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - parsed.days)
+    : subtractMonthsClamped(now, parsed.months);
+  return {
+    start: startOfDay(start),
+    end: endOfDay(now),
+  };
+}
+
 function startOfWeek(date) {
   const start = startOfDay(date);
   const day = start.getDay() || 7;
@@ -245,7 +306,7 @@ function bucketKey(timestamp, bucket) {
 }
 
 function getRange(events) {
-  const now = new Date();
+  const now = state.now ? new Date(state.now) : new Date();
   if (state.preset === "today") {
     return { start: startOfDay(now), end: endOfDay(now) };
   }
@@ -260,6 +321,12 @@ function getRange(events) {
       start: state.startDate ? new Date(`${state.startDate}T00:00:00`) : null,
       end: state.endDate ? new Date(`${state.endDate}T23:59:59.999`) : null,
     };
+  }
+  if (state.preset === "recent") {
+    const range = recentDateRange(state.recentValue, now);
+    if (range) {
+      return range;
+    }
   }
   const dates = events.map((event) => new Date(event.timestamp)).filter((date) => !Number.isNaN(date.getTime()));
   return {
@@ -364,6 +431,17 @@ export function summarize(report) {
     sessionCount: new Set(events.map((event) => event.sessionId)).size,
     eventCount: events.length,
   };
+}
+
+export function setSummaryFilters(filters = {}) {
+  for (const key of ["preset", "bucket", "startDate", "endDate", "recentValue"]) {
+    if (Object.hasOwn(filters, key)) {
+      state[key] = filters[key] || "";
+    }
+  }
+  if (Object.hasOwn(filters, "now")) {
+    state.now = filters.now || null;
+  }
 }
 
 function setMetric(id, value) {
@@ -703,6 +781,19 @@ function updatePresetButtons() {
   }
 }
 
+function updateRecentControls() {
+  const recentValue = $("#recentValue");
+  if (recentValue && recentValue.value !== state.recentValue) {
+    recentValue.value = state.recentValue;
+  }
+  const recentPresetSelect = $("#recentPresetSelect");
+  if (!recentPresetSelect) {
+    return;
+  }
+  const hasOption = [...recentPresetSelect.options].some((option) => option.value === state.recentValue);
+  recentPresetSelect.value = hasOption ? state.recentValue : "";
+}
+
 function usageQuery({ force = false, skipCheck = false } = {}) {
   const params = new URLSearchParams({
     preset: state.preset,
@@ -715,6 +806,9 @@ function usageQuery({ force = false, skipCheck = false } = {}) {
     if (state.endDate) {
       params.set("endDate", state.endDate);
     }
+  }
+  if (state.preset === "recent" && state.recentValue) {
+    params.set("recentValue", state.recentValue);
   }
   if (force) {
     params.set("force", "1");
@@ -814,6 +908,7 @@ function bootDashboard() {
     }
     state.preset = button.dataset.preset;
     updatePresetButtons();
+    updateRecentControls();
     refreshViewForFilters();
   });
 
@@ -833,6 +928,22 @@ function bootDashboard() {
     state.endDate = event.target.value;
     state.preset = "custom";
     updatePresetButtons();
+    refreshViewForFilters();
+  });
+
+  $("#recentValue").addEventListener("change", (event) => {
+    state.recentValue = event.target.value.trim();
+    state.preset = "recent";
+    updatePresetButtons();
+    updateRecentControls();
+    refreshViewForFilters();
+  });
+
+  $("#recentPresetSelect").addEventListener("change", (event) => {
+    state.recentValue = event.target.value;
+    state.preset = "recent";
+    updatePresetButtons();
+    updateRecentControls();
     refreshViewForFilters();
   });
 
@@ -870,6 +981,7 @@ function bootDashboard() {
   });
 
   setTheme(preferredTheme(), { persist: false });
+  updateRecentControls();
   setImportControlsDisabled(isStaticSnapshot());
   loadUsage().then(startAutoRefresh);
 }
