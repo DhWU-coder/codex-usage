@@ -121,7 +121,8 @@ label {
 .panel-action,
 .dialog-actions button,
 .theme-toggle button,
-.segmented button {
+.segmented button,
+.segmented .recent-segment {
   border: 1px solid var(--line);
   background: var(--control);
   color: var(--ink);
@@ -136,7 +137,8 @@ label {
 .panel-action:hover,
 .dialog-actions button:hover,
 .theme-toggle button:hover,
-.segmented button:hover {
+.segmented button:hover,
+.segmented .recent-segment:hover {
   border-color: var(--control-hover);
 }
 
@@ -186,7 +188,8 @@ label {
   gap: 6px;
 }
 
-.segmented button.active {
+.segmented button.active,
+.segmented .recent-segment.active {
   background: var(--blue);
   border-color: var(--blue);
   color: var(--active-ink);
@@ -194,10 +197,6 @@ label {
 
 .custom-range {
   grid-template-columns: repeat(2, minmax(130px, 1fr));
-}
-
-.recent-range {
-  min-width: 180px;
 }
 
 label {
@@ -213,6 +212,27 @@ select {
   background: var(--control);
   color: var(--ink);
   padding: 0 10px;
+}
+
+.segmented .recent-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 12px;
+}
+
+.recent-segment-input {
+  width: 78px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 0 6px;
+}
+
+.recent-segment.active .recent-segment-input {
+  border-color: var(--control-hover);
 }
 
 .metrics {
@@ -490,10 +510,6 @@ canvas {
   .wide-grid,
   .custom-range {
     grid-template-columns: 1fr;
-  }
-
-  .recent-range {
-    min-width: 0;
   }
 
   .metric strong {
