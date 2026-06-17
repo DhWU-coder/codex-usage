@@ -38,8 +38,11 @@
 {
   "schema_version": "codex-usage.project-log.v1",
   "timestamp": "2026-05-31T12:00:00.000Z",
-  "source": "codex-oauth",
-  "channel": "Codex OAuth",
+  "source": "claudish",
+  "channel": "Claudish",
+  "provider": "openai-codex",
+  "auth": "codex-oauth",
+  "api_surface": "chatgpt-codex-responses",
   "project_root": "/absolute/path/to/project",
   "cwd": "/absolute/path/to/project/or/current/workdir",
   "session_id": "stable-session-or-run-id",
@@ -59,8 +62,8 @@
 
 - `schema_version`：固定为 `codex-usage.project-log.v1`
 - `timestamp`：请求完成时间，ISO 8601 格式
-- `source`：机器可读来源，例如 `codex-oauth`、`openai-api`
-- `channel`：前端展示名称，例如 `Codex OAuth`
+- `source`：机器可读的产生日志的项目或组件，例如 `claudish`、`codex-api-service`、`my-agent`
+- `channel`：前端展示名称，通常对应产生日志的项目或组件，例如 `Claudish`、`Codex API Service`
 - `project_root`：目标项目根目录的绝对路径
 - `cwd`：这次请求发生时的工作目录绝对路径
 - `session_id`：一次会话、一次批处理或一次进程运行的稳定 ID
@@ -72,6 +75,9 @@
 可选字段：
 
 - `request_id`：服务商 request id，如果能拿到就写
+- `provider`：实际调用的上游 provider，例如 `openai-codex`、`openai`、`anthropic-compatible`
+- `auth`：认证方式，例如 `codex-oauth`、`api-key`、`none`
+- `api_surface`：接口形态或后端面，例如 `chatgpt-codex-responses`、`openai-responses`、`openai-chat-completions`
 - `usage.cached`：缓存输入 token；没有就写 `0`
 - `usage.reasoning`：推理输出 token；没有就写 `0`
 
@@ -94,14 +100,23 @@ usage.cached_input_tokens or usage.prompt_tokens_details.cached_tokens -> usage.
 usage.reasoning_output_tokens or usage.output_tokens_details.reasoning_tokens -> usage.reasoning
 ```
 
-如果目标项目实际调用的是 `codex-oauth`，请设置：
+## 来源字段建议
+
+`source` 和 `channel` 应该表达“谁产生日志”，不要只表达认证方式。认证方式请放到 `auth`，上游 provider 请放到 `provider`。
+
+例如 `claudish` 通过 `codex-oauth` 调用 `openai-codex` 时，推荐设置：
 
 ```json
 {
-  "source": "codex-oauth",
-  "channel": "Codex OAuth"
+  "source": "claudish",
+  "channel": "Claudish",
+  "provider": "openai-codex",
+  "auth": "codex-oauth",
+  "api_surface": "chatgpt-codex-responses"
 }
 ```
+
+如果另一个项目直接调用同一套 `codex-oauth`，也应该把 `source` 写成那个项目自身，例如 `codex-api-service`。这样 `codex-usage` 的分组能回答“哪个项目产生了用量”，同时仍然保留“它通过什么认证和上游接口调用”的信息。
 
 ## 写入规则
 
