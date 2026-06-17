@@ -41,12 +41,17 @@ async function makeFixtureHome() {
       },
     ]),
   );
-  return { homeDir: fakeHome, sessionFile };
+  return {
+    homeDir: fakeHome,
+    // Keep server tests independent from the developer's real ~/.codex-usage/imports.json.
+    importStoreFile: path.join(fakeHome, ".codex-usage", "imports.json"),
+    sessionFile,
+  };
 }
 
 test("server serves the dashboard and usage API", async () => {
-  const { homeDir } = await makeFixtureHome();
-  const server = createUsageServer({ homeDir });
+  const { homeDir, importStoreFile } = await makeFixtureHome();
+  const server = createUsageServer({ homeDir, importStoreFile });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
 
@@ -67,10 +72,34 @@ test("server serves the dashboard and usage API", async () => {
     assert.equal(recentJson.summary.totals.total, 0);
     assert.equal(json.metadata.eventCount, 1);
     assert.equal(json.metadata.sessionCount, 1);
+    assert.equal(json.metadata.homes[0].status, "active");
+    assert.equal(json.metadata.homes[0].eventCount, 1);
     assert.equal(json.report, undefined);
 
     const detailed = await fetch(`${baseUrl}/api/usage?detail=full`).then((response) => response.json());
     assert.equal(detailed.report.events[0].channel, "CLI");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("server reports unsupported stored imports instead of hiding them", async () => {
+  const { homeDir, importStoreFile } = await makeFixtureHome();
+  const unsupportedPath = path.join(homeDir, "plain-project");
+  await mkdir(unsupportedPath, { recursive: true });
+  await mkdir(path.dirname(importStoreFile), { recursive: true });
+  await writeFile(importStoreFile, JSON.stringify({ imports: [{ path: unsupportedPath }] }));
+
+  const server = createUsageServer({ homeDir, importStoreFile });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const imports = await fetch(`http://127.0.0.1:${port}/api/imports`).then((response) => response.json());
+
+    assert.equal(imports.imports[0].type, "unsupported");
+    assert.equal(imports.imports[0].path, unsupportedPath);
+    assert.match(imports.imports[0].reason, /目录需要是 Codex home/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -82,8 +111,8 @@ test("server keeps full detail reports behind the documented 512MB heap budget",
 });
 
 test("server reports status changes and refreshes cached usage reports", async () => {
-  const { homeDir, sessionFile } = await makeFixtureHome();
-  const server = createUsageServer({ homeDir });
+  const { homeDir, importStoreFile, sessionFile } = await makeFixtureHome();
+  const server = createUsageServer({ homeDir, importStoreFile });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -131,9 +160,8 @@ test("server reports status changes and refreshes cached usage reports", async (
 });
 
 test("server imports project usage log directories and refreshes usage data", async () => {
-  const { homeDir } = await makeFixtureHome();
+  const { homeDir, importStoreFile } = await makeFixtureHome();
   const projectRoot = path.join(homeDir, "openai_codex");
-  const importStoreFile = path.join(homeDir, ".codex-usage", "imports.json");
   await mkdir(path.join(projectRoot, ".codex-usage"), { recursive: true });
   await writeFile(
     path.join(projectRoot, ".codex-usage", "usage.jsonl"),
@@ -180,6 +208,31 @@ test("server imports project usage log directories and refreshes usage data", as
       ],
     );
     assert.equal(after.metadata.homes.some((home) => home.kind === "project-log" && home.path === projectRoot), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("server returns a picked directory from the local directory picker", async () => {
+  const { homeDir, importStoreFile } = await makeFixtureHome();
+  const pickedPath = path.join(homeDir, "picked-project");
+  const server = createUsageServer({
+    homeDir,
+    importStoreFile,
+    // Tests inject the picker so they never open an OS dialog.
+    pickDirectory: async () => pickedPath,
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/pick-directory`, {
+      method: "POST",
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, { path: pickedPath });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

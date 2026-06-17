@@ -75,6 +75,46 @@ test("summarize filters recent natural month ranges", () => {
   }
 });
 
+test("summarize includes previous-period comparison totals", () => {
+  setSummaryFilters({
+    preset: "today",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-06-02T09:00:00",
+          sessionId: "previous",
+          channel: "CLI",
+          total: { total: 100, input: 100, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-03T09:00:00",
+          sessionId: "current",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.equal(summary.comparison.previousTotals.total, 100);
+    assert.equal(summary.comparison.totalDelta, 200);
+    assert.equal(summary.comparison.percentChange, 200);
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
+});
+
 test("normalizeRecentValue defaults bare numbers to days", () => {
   assert.equal(normalizeRecentValue("7"), "7天");
   assert.equal(normalizeRecentValue(" 14 "), "14天");

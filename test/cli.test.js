@@ -83,10 +83,16 @@ function isProcessRunning(pid) {
   }
 }
 
-function runCli(args) {
+function isolatedEnv(homeDir) {
+  // Keep CLI integration tests from reading the developer's real ~/.codex-usage state.
+  return { ...process.env, HOME: homeDir };
+}
+
+function runCli(args, env = process.env) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["src/cli.js", ...args], {
       cwd: path.resolve(import.meta.dirname, ".."),
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
@@ -125,6 +131,7 @@ test("cli run starts a local usage server", async () => {
     ],
     {
       cwd: path.resolve(import.meta.dirname, ".."),
+      env: isolatedEnv(homeDir),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -139,6 +146,17 @@ test("cli run starts a local usage server", async () => {
       await waitForExit(child);
     }
   }
+});
+
+test("cli summary --json returns lightweight summary metadata without full report", async () => {
+  const homeDir = await makeFixtureHome();
+
+  const output = await runCli(["summary", "--json", "--home-dir", homeDir], isolatedEnv(homeDir));
+  const parsed = JSON.parse(output);
+
+  assert.equal(parsed.summary.totals.total, 77);
+  assert.equal(parsed.metadata.eventCount, 1);
+  assert.equal(parsed.report, undefined);
 });
 
 test("cli gateway starts a background usage server and returns", async () => {
@@ -157,7 +175,7 @@ test("cli gateway starts a background usage server and returns", async () => {
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
     const match = output.match(/http:\/\/127\.0\.0\.1:(\d+)/);
     assert.ok(match, output);
     url = match[0];
@@ -165,7 +183,7 @@ test("cli gateway starts a background usage server and returns", async () => {
     const usage = await fetch(`${url}/api/usage`).then((response) => response.json());
     assert.equal(usage.summary.totals.total, 77);
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -184,7 +202,7 @@ test("cli gateway uses a safer default heap budget for dashboard refreshes", asy
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
 
     const state = JSON.parse(await readFile(stateFile, "utf8"));
     const service = state.services[0];
@@ -194,7 +212,7 @@ test("cli gateway uses a safer default heap budget for dashboard refreshes", asy
       `expected gateway Node args to include a 256MB heap budget, got ${JSON.stringify(service.nodeExecArgv)}`,
     );
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -213,7 +231,7 @@ test("cli restart stops existing services and starts a new gateway", async () =>
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
     const startMatch = startOutput.match(/(http:\/\/127\.0\.0\.1:\d+).*pid (\d+)/);
     assert.ok(startMatch, startOutput);
     const firstPid = Number(startMatch[2]);
@@ -229,7 +247,7 @@ test("cli restart stops existing services and starts a new gateway", async () =>
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
     assert.match(restartOutput, /Stopped 1 Codex Usage service/);
     const restartMatch = restartOutput.match(/Codex Usage gateway restarted: (http:\/\/127\.0\.0\.1:\d+) \(pid (\d+)\)/);
     assert.ok(restartMatch, restartOutput);
@@ -247,7 +265,7 @@ test("cli restart stops existing services and starts a new gateway", async () =>
       [restartPid],
     );
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -275,6 +293,7 @@ test("cli run recovers from a stale service lock", async () => {
     ],
     {
       cwd: path.resolve(import.meta.dirname, ".."),
+      env: isolatedEnv(homeDir),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -307,14 +326,14 @@ test("cli dashboard starts a background service and prints the dashboard URL", a
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
     const match = output.match(/http:\/\/127\.0\.0\.1:(\d+)/);
     assert.ok(match, output);
 
     const usage = await fetch(`${match[0]}/api/usage`).then((response) => response.json());
     assert.equal(usage.summary.totals.total, 77);
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -339,7 +358,9 @@ test("cud command opens the dashboard by default", async () => {
         homeDir,
         "--state-file",
         stateFile,
-      ]);
+      ], {
+        env: isolatedEnv(homeDir),
+      });
       let text = "";
       child.stdout.on("data", (chunk) => {
         text += chunk.toString();
@@ -358,7 +379,7 @@ test("cud command opens the dashboard by default", async () => {
     assert.match(output, /Codex Usage dashboard/);
     assert.match(output, /http:\/\/127\.0\.0\.1:(\d+)/);
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -378,11 +399,11 @@ test("codex-usage -d opens the dashboard", async () => {
       homeDir,
       "--state-file",
       stateFile,
-    ]);
+    ], isolatedEnv(homeDir));
     assert.match(output, /Codex Usage dashboard/);
     assert.match(output, /http:\/\/127\.0\.0\.1:(\d+)/);
   } finally {
-    await runCli(["stop", "--state-file", stateFile]);
+    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
 });
 
@@ -406,6 +427,7 @@ test("cli stop terminates all running usage services from the state file", async
       ],
       {
         cwd: path.resolve(import.meta.dirname, ".."),
+        env: isolatedEnv(homeDir),
         stdio: ["ignore", "pipe", "pipe"],
       },
     ),
@@ -416,6 +438,7 @@ test("cli stop terminates all running usage services from the state file", async
 
     const stop = spawn(process.execPath, ["src/cli.js", "stop", "--state-file", stateFile], {
       cwd: path.resolve(import.meta.dirname, ".."),
+      env: isolatedEnv(homeDir),
       stdio: ["ignore", "pipe", "pipe"],
     });
 

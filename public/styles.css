@@ -118,6 +118,7 @@ label {
 
 #refreshButton,
 #importButton,
+#pickImportDirectoryButton,
 .panel-action,
 .dialog-actions button,
 .theme-toggle button,
@@ -134,6 +135,7 @@ label {
 
 #refreshButton:hover,
 #importButton:hover,
+#pickImportDirectoryButton:hover,
 .panel-action:hover,
 .dialog-actions button:hover,
 .theme-toggle button:hover,
@@ -351,6 +353,47 @@ select {
   margin-bottom: 16px;
 }
 
+.comparison-strip {
+  /* Trend cards sit between metrics and charts so changes are visible without crowding totals. */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.comparison-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.comparison-item span,
+.comparison-item small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.comparison-item strong {
+  font-size: 18px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.comparison-item.up strong {
+  color: var(--red);
+}
+
+.comparison-item.down strong {
+  color: var(--green);
+}
+
 .metric,
 .panel {
   background: var(--panel);
@@ -400,6 +443,19 @@ select {
   margin-bottom: 12px;
 }
 
+.list-tools {
+  /* Search and expand controls stay compact in desktop panels and wrap on mobile. */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: min(280px, 60%);
+}
+
+.list-tools input {
+  width: min(180px, 100%);
+}
+
 .chart-panel {
   min-height: 390px;
 }
@@ -408,6 +464,38 @@ canvas {
   display: block;
   width: 100%;
   height: 320px;
+}
+
+.timeline-details {
+  /* This list mirrors the canvas data for touch and keyboard users. */
+  display: grid;
+  gap: 6px;
+  max-height: 168px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.timeline-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-detail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-detail-value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .bar-list,
@@ -422,6 +510,14 @@ canvas {
 .home-row {
   display: grid;
   gap: 6px;
+}
+
+.bar-row:focus-visible,
+.compact-row:focus-visible,
+.timeline-detail-row:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+  border-radius: 6px;
 }
 
 .bar-label,
@@ -449,6 +545,37 @@ canvas {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.home-meta {
+  /* Directory status metadata is dense but wraps before it can overflow paths. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.home-status {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.home-reason {
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.home-remove {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--control);
+  color: var(--ink);
+  cursor: pointer;
 }
 
 .bar-track {
@@ -524,6 +651,13 @@ canvas {
   gap: 14px;
 }
 
+.path-picker {
+  /* Keep manual entry first while offering a native folder chooser beside it. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
 .dialog-actions {
   justify-content: flex-end;
 }
@@ -593,9 +727,16 @@ canvas {
 
 @media (max-width: 1020px) {
   .metrics,
+  .comparison-strip,
   .main-grid,
   .wide-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .path-picker {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -615,10 +756,31 @@ canvas {
   }
 
   .metrics,
+  .comparison-strip,
   .main-grid,
   .wide-grid,
   .custom-range {
     grid-template-columns: 1fr;
+  }
+
+  .comparison-item {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .list-tools {
+    justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .list-tools input {
+    flex: 1;
+    width: auto;
   }
 
   .metric strong {

@@ -1,8 +1,10 @@
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import v8 from "node:v8";
 
 import {
@@ -19,6 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
 const MIN_FULL_DETAIL_HEAP_BYTES = 512 * 1024 * 1024;
 const DEFAULT_IMPORT_STORE_FILE = path.join(os.homedir(), ".codex-usage", "imports.json");
+const execFileAsync = promisify(execFile);
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -131,7 +134,7 @@ async function listImportEntries(options = {}) {
   for (const entry of storedEntries) {
     described.push(await describeImportEntry(entry.path));
   }
-  return described.filter((entry) => entry.type !== "unsupported");
+  return described;
 }
 
 async function usageOptions(options = {}) {
@@ -149,6 +152,32 @@ async function readJsonBody(request) {
     }
   }
   return body ? JSON.parse(body) : {};
+}
+
+async function pickDirectoryWithSystemDialog() {
+  // The browser cannot expose absolute local paths, so the local server opens
+  // the native macOS folder picker and returns only the selected path.
+  if (process.platform !== "darwin") {
+    throw new Error("Directory picker is only available on macOS; enter the path manually.");
+  }
+
+  try {
+    const { stdout } = await execFileAsync("osascript", [
+      "-e",
+      'POSIX path of (choose folder with prompt "选择要导入的 Codex Usage 目录")',
+    ]);
+    return stdout.trim();
+  } catch (error) {
+    if (error.code === 1 && String(error.stderr || "").includes("-128")) {
+      return "";
+    }
+    throw error;
+  }
+}
+
+function pickDirectory(options = {}) {
+  // Tests and future desktop shells can inject a picker without changing routes.
+  return options.pickDirectory ? options.pickDirectory() : pickDirectoryWithSystemDialog();
 }
 
 async function serveStatic(requestPath, response) {
@@ -173,6 +202,14 @@ async function serveStatic(requestPath, response) {
 
 export function createUsageServer(options = {}) {
   let cache = null;
+
+  async function metadataForIndex(index) {
+    // The dashboard needs both active scan sources and stored imports that may currently be unsupported.
+    return {
+      ...usageIndexMetadata(index),
+      imports: await listImportEntries(options),
+    };
+  }
 
   async function loadUsageIndex({ force = false, check = true } = {}) {
     const currentUsageOptions = await usageOptions(options);
@@ -252,6 +289,16 @@ export function createUsageServer(options = {}) {
         return;
       }
 
+      if (url.pathname === "/api/pick-directory") {
+        if (request.method !== "POST") {
+          sendJson(response, 405, { error: "Method not allowed" });
+          return;
+        }
+
+        sendJson(response, 200, { path: await pickDirectory(options) });
+        return;
+      }
+
       if (url.pathname === "/api/usage") {
         const force = url.searchParams.get("force") === "1";
         const detail = url.searchParams.get("detail");
@@ -276,6 +323,7 @@ export function createUsageServer(options = {}) {
               sessionCount: report.sessions.length,
               homeCount: report.homes.length,
               homes: report.homes,
+              imports: await listImportEntries(options),
               warnings: report.warnings,
             },
             report,
@@ -289,7 +337,7 @@ export function createUsageServer(options = {}) {
         sendJson(response, 200, {
           fingerprint: usage.fingerprint,
           checkedAt: usage.checkedAt,
-          metadata: usageIndexMetadata(usage.index),
+          metadata: await metadataForIndex(usage.index),
           summary: summarizeUsageIndex(usage.index, requestFilters(url)),
         });
         return;
@@ -300,7 +348,7 @@ export function createUsageServer(options = {}) {
         sendJson(response, 200, {
           fingerprint: usage.fingerprint,
           checkedAt: usage.checkedAt,
-          metadata: usageIndexMetadata(usage.index),
+          metadata: await metadataForIndex(usage.index),
           summary: summarizeUsageIndex(usage.index, requestFilters(url)),
         });
         return;

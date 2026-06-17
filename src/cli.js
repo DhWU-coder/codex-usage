@@ -7,7 +7,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createUsageServer } from "./server.js";
-import { buildUsageReport, summarizeUsage } from "./usage-core.js";
+import {
+  buildUsageIndex,
+  buildUsageReport,
+  summarizeUsage,
+  summarizeUsageIndex,
+  usageIndexMetadata,
+} from "./usage-core.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3765;
@@ -259,10 +265,18 @@ function printHuman(summary) {
 }
 
 async function printSummary(command, args) {
-  const report = await buildUsageReport(reportOptions(args));
-  const summary = summarizeUsage(report, { preset: "all", bucket: "month" });
-  if (command === "json" || hasFlag(args, "--json")) {
+  if (command === "json") {
+    const report = await buildUsageReport(reportOptions(args));
+    const summary = summarizeUsage(report, { preset: "all", bucket: "month" });
     console.log(JSON.stringify({ report, summary }, null, 2));
+    return;
+  }
+
+  // Summary commands use the compact index path so routine CLI checks stay low-memory.
+  const index = await buildUsageIndex(reportOptions(args));
+  const summary = summarizeUsageIndex(index, { preset: "all", bucket: "month" });
+  if (hasFlag(args, "--json")) {
+    console.log(JSON.stringify({ metadata: usageIndexMetadata(index), summary }, null, 2));
     return;
   }
   printHuman(summary);

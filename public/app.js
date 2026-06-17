@@ -11,10 +11,15 @@ const state = {
   now: null,
   autoRefreshTimer: null,
   theme: "light",
+  projectQuery: "",
+  modelQuery: "",
+  projectsExpanded: false,
+  modelsExpanded: false,
 };
 
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
 const THEME_STORAGE_KEY = "codexUsageTheme";
+const RANKED_LIST_LIMIT = 25;
 const formatter = new Intl.NumberFormat("en-US");
 const compactFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -87,6 +92,16 @@ function escapeHtml(value) {
   });
 }
 
+// Normalize optional row labels before rendering or building accessible names.
+function usageRowName(row) {
+  return row?.name || row?.key || "未知";
+}
+
+// Keep keyboard/screen-reader labels aligned with the visual token value.
+function usageRowAriaLabel(row) {
+  return `${usageRowName(row)}：${formatTokens(usageValue(row?.total, "total"))} tokens`;
+}
+
 export function formatUsageTooltip(row) {
   const total = row?.total || emptyUsage();
   const details = [
@@ -142,7 +157,7 @@ function hideUsageTooltip() {
   }
 }
 
-function positionUsageTooltip(event) {
+function positionUsageTooltip(anchor) {
   const tooltip = usageTooltip();
   if (!tooltip || tooltip.hidden) {
     return;
@@ -151,19 +166,22 @@ function positionUsageTooltip(event) {
   const margin = 8;
   const width = tooltip.offsetWidth;
   const height = tooltip.offsetHeight;
-  let left = event.clientX + offset;
-  let top = event.clientY + offset;
+  const rect = anchor?.getBoundingClientRect?.();
+  const anchorX = Number.isFinite(anchor?.clientX) ? anchor.clientX : rect?.left || margin;
+  const anchorY = Number.isFinite(anchor?.clientY) ? anchor.clientY : rect?.bottom || margin;
+  let left = anchorX + offset;
+  let top = anchorY + offset;
   if (left + width + margin > window.innerWidth) {
-    left = event.clientX - width - offset;
+    left = anchorX - width - offset;
   }
   if (top + height + margin > window.innerHeight) {
-    top = event.clientY - height - offset;
+    top = anchorY - height - offset;
   }
   tooltip.style.left = `${Math.max(margin, left)}px`;
   tooltip.style.top = `${Math.max(margin, top)}px`;
 }
 
-function showUsageTooltip(row, event) {
+function showUsageTooltip(row, anchor) {
   const tooltip = usageTooltip();
   if (!tooltip || !row) {
     hideUsageTooltip();
@@ -171,7 +189,7 @@ function showUsageTooltip(row, event) {
   }
   tooltip.innerHTML = formatUsageTooltip(row);
   tooltip.hidden = false;
-  positionUsageTooltip(event);
+  positionUsageTooltip(anchor);
 }
 
 function bindUsageRows(container, selector, rows) {
@@ -407,6 +425,68 @@ function groupEvents(events, keyFn, options = {}) {
   }));
 }
 
+function previousPeriodRange(range) {
+  // Only bounded presets have a meaningful previous period to compare against.
+  if (!range.start || !range.end || state.preset === "all") {
+    return null;
+  }
+  const durationMs = range.end.getTime() - range.start.getTime() + 1;
+  return {
+    start: new Date(range.start.getTime() - durationMs),
+    end: new Date(range.start.getTime() - 1),
+  };
+}
+
+function comparisonLabel() {
+  return {
+    today: "较昨日",
+    week: "较上周",
+    month: "较上月",
+    custom: "较上一等长周期",
+    recent: "较上一等长周期",
+  }[state.preset] || "暂无对比";
+}
+
+function percentChange(current, previous) {
+  if (!previous) {
+    return null;
+  }
+  return Math.round(((current - previous) / previous) * 10_000) / 100;
+}
+
+function summarizeComparison(allEvents, range, currentTotals) {
+  // Static exports compute trends client-side because no API is available.
+  const previousRange = previousPeriodRange(range);
+  if (!previousRange) {
+    return {
+      label: comparisonLabel(),
+      previousRange: null,
+      previousTotals: emptyUsage(),
+      previousEventCount: 0,
+      previousSessionCount: 0,
+      totalDelta: currentTotals.total,
+      percentChange: null,
+    };
+  }
+  const previousEvents = allEvents.filter((event) => {
+    const time = Date.parse(event.timestamp);
+    return Number.isFinite(time) && time >= previousRange.start.getTime() && time <= previousRange.end.getTime();
+  });
+  const previousTotals = previousEvents.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
+  return {
+    label: comparisonLabel(),
+    previousRange: {
+      start: previousRange.start.toISOString(),
+      end: previousRange.end.toISOString(),
+    },
+    previousTotals,
+    previousEventCount: previousEvents.length,
+    previousSessionCount: new Set(previousEvents.map((event) => event.sessionId)).size,
+    totalDelta: currentTotals.total - previousTotals.total,
+    percentChange: percentChange(currentTotals.total, previousTotals.total),
+  };
+}
+
 export function summarize(report) {
   const range = getRange(report.events);
   const events = report.events.filter((event) => {
@@ -427,11 +507,12 @@ export function summarize(report) {
     a.key.localeCompare(b.key),
   );
   const channels = groupEvents(events, (event) => event.channel).sort((a, b) => b.total.total - a.total.total);
-  const projects = groupEvents(events, (event) => event.cwd || "Unknown cwd").sort((a, b) => b.total.total - a.total.total).slice(0, 25);
+  const projects = groupEvents(events, (event) => event.cwd || "Unknown cwd").sort((a, b) => b.total.total - a.total.total);
   const models = groupEvents(events, (event) => event.model || "Unknown model").sort((a, b) => b.total.total - a.total.total);
   return {
     range,
     totals,
+    comparison: summarizeComparison(report.events, range, totals),
     timeline,
     channels,
     projects,
@@ -473,21 +554,23 @@ function rangeLabel(summary) {
   return `${start} 至 ${end} · ${bucket}`;
 }
 
-function renderBarList(container, rows, colorMap = null) {
+export function renderBarListHtml(rows, colorMap = null) {
+  // Build escaped HTML in one place so all bar-list render paths stay safe.
   if (!rows.length) {
-    container.innerHTML = `<div class="empty">没有匹配的用量记录</div>`;
-    return;
+    return `<div class="empty">没有匹配的用量记录</div>`;
   }
   const max = rows[0].total.total || 1;
-  container.innerHTML = rows
+  return rows
     .map((row) => {
       const width = Math.max(2, (row.total.total / max) * 100);
       const color = colorMap?.get(row.name);
       const fillStyle = `width: ${width}%;${color ? ` background: ${color};` : ""}`;
+      const name = escapeHtml(usageRowName(row));
+      const ariaLabel = escapeHtml(usageRowAriaLabel(row));
       return `
-        <div class="bar-row" data-usage-tooltip="true">
+        <div class="bar-row" data-usage-tooltip="true" tabindex="0" aria-label="${ariaLabel}">
           <div class="bar-label">
-            <span class="bar-name" title="${row.name}">${row.name}</span>
+            <span class="bar-name" title="${name}">${name}</span>
             <span class="bar-value">${formatTokens(row.total.total)}</span>
           </div>
           <div class="bar-track"><div class="bar-fill" style="${fillStyle}"></div></div>
@@ -495,27 +578,134 @@ function renderBarList(container, rows, colorMap = null) {
       `;
     })
     .join("");
+}
+
+function renderBarList(container, rows, colorMap = null) {
+  container.innerHTML = renderBarListHtml(rows, colorMap);
   bindUsageRows(container, ".bar-row", rows);
 }
 
-function renderCompactList(container, rows) {
+export function renderCompactListHtml(rows) {
+  // Compact rows are focusable so keyboard users can reach the same tooltip details.
   if (!rows.length) {
-    container.innerHTML = `<div class="empty">没有匹配的用量记录</div>`;
-    return;
+    return `<div class="empty">没有匹配的用量记录</div>`;
   }
-  container.innerHTML = rows
+  return rows
     .map(
-      (row) => `
-        <div class="compact-row" data-usage-tooltip="true">
+      (row) => {
+        const name = escapeHtml(usageRowName(row));
+        const ariaLabel = escapeHtml(usageRowAriaLabel(row));
+        return `
+        <div class="compact-row" data-usage-tooltip="true" tabindex="0" aria-label="${ariaLabel}">
           <div class="compact-label">
-            <span class="compact-name" title="${row.name}">${row.name}</span>
+            <span class="compact-name" title="${name}">${name}</span>
             <span class="compact-value">${formatTokens(row.total.total)}</span>
           </div>
         </div>
-      `,
+      `;
+      },
     )
     .join("");
+}
+
+function renderCompactList(container, rows) {
+  container.innerHTML = renderCompactListHtml(rows);
   bindUsageRows(container, ".compact-row", rows);
+}
+
+export function renderTimelineDetailsHtml(rows) {
+  // The timeline detail list mirrors the canvas for mobile and keyboard access.
+  if (!rows.length) {
+    return `<div class="empty">没有匹配的用量记录</div>`;
+  }
+  return rows
+    .map((row) => {
+      const name = escapeHtml(usageRowName(row));
+      const ariaLabel = escapeHtml(usageRowAriaLabel(row));
+      return `
+        <div class="timeline-detail-row" data-usage-tooltip="true" tabindex="0" aria-label="${ariaLabel}">
+          <span class="timeline-detail-name">${name}</span>
+          <span class="timeline-detail-value">${formatTokens(row.total.total)}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderTimelineDetails(container, rows) {
+  container.innerHTML = renderTimelineDetailsHtml(rows);
+  bindUsageRows(container, ".timeline-detail-row", rows);
+}
+
+export function filterRankedRows(rows, { query = "", expanded = false, limit = RANKED_LIST_LIMIT } = {}) {
+  // Search intentionally scans the full sorted list even when the default view is capped.
+  const normalized = String(query || "").trim().toLowerCase();
+  const filtered = normalized
+    ? rows.filter((row) => usageRowName(row).toLowerCase().includes(normalized))
+    : rows;
+  return normalized || expanded ? filtered : filtered.slice(0, limit);
+}
+
+function formatDelta(value) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatTokens(value)}`;
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined) {
+    return "无基准";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value}%`;
+}
+
+function renderComparison(summary) {
+  // Live and static summaries share the same comparison shape.
+  const container = $("#comparisonSummary");
+  if (!container) {
+    return;
+  }
+  const comparison = summary.comparison;
+  if (!comparison) {
+    container.innerHTML = "";
+    return;
+  }
+  if (!comparison.previousRange) {
+    container.innerHTML = `
+      <article class="comparison-item flat">
+        <span>趋势变化</span>
+        <strong>暂无对比</strong>
+        <small>选择今日、本周、本月或最近范围查看</small>
+      </article>
+    `;
+    return;
+  }
+  const deltaClass = comparison.totalDelta > 0 ? "up" : comparison.totalDelta < 0 ? "down" : "flat";
+  container.innerHTML = `
+    <article class="comparison-item ${deltaClass}">
+      <span>${escapeHtml(comparison.label)}</span>
+      <strong>${formatDelta(comparison.totalDelta)}</strong>
+      <small>${formatPercent(comparison.percentChange)}</small>
+    </article>
+    <article class="comparison-item">
+      <span>上一周期 tokens</span>
+      <strong>${formatTokens(comparison.previousTotals.total)}</strong>
+      <small>${formatTokens(comparison.previousSessionCount)} 个会话</small>
+    </article>
+  `;
+}
+
+function updateRankedListControls(kind, rows) {
+  const query = kind === "project" ? state.projectQuery : state.modelQuery;
+  const expanded = kind === "project" ? state.projectsExpanded : state.modelsExpanded;
+  const button = $(`#${kind}Toggle`);
+  if (!button) {
+    return;
+  }
+  const hasQuery = Boolean(String(query || "").trim());
+  button.hidden = hasQuery || rows.length <= RANKED_LIST_LIMIT;
+  button.textContent = expanded ? "收起" : "展开";
+  button.setAttribute("aria-expanded", String(expanded));
 }
 
 function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map()) {
@@ -642,35 +832,120 @@ function setupUsageTooltip() {
     showUsageTooltip(tooltipRows.get(target), event);
   });
   document.addEventListener("pointerleave", hideUsageTooltip);
+  document.addEventListener("focusin", (event) => {
+    const target = event.target.closest?.("[data-usage-tooltip]");
+    if (!target) {
+      return;
+    }
+    showUsageTooltip(tooltipRows.get(target), target);
+  });
+  document.addEventListener("focusout", (event) => {
+    if (event.target.closest?.("[data-usage-tooltip]")) {
+      hideUsageTooltip();
+    }
+  });
 }
 
-function renderHomes(homes) {
-  const container = $("#homeList");
-  if (!homes.length) {
-    container.innerHTML = `<div class="empty">没有发现 Codex 目录</div>`;
-    return;
+function homeStatusLabel(home) {
+  // Convert machine-friendly scan states into compact dashboard labels.
+  if (home.type === "unsupported" || home.status === "unsupported") {
+    return "不可用";
   }
-  container.innerHTML = homes
-    .map(
-      (home) => `
+  if (home.status === "active" && home.eventCount > 0) {
+    return "有用量记录";
+  }
+  if (home.status === "no-events") {
+    return "无用量记录";
+  }
+  return "可扫描";
+}
+
+function homeRowsFromMetadata(metadata) {
+  // Preserve unsupported stored imports so users can remove or fix them.
+  const homes = [...(metadata.homes || [])];
+  const seen = new Set(homes.map((home) => home.path));
+  for (const entry of metadata.imports || []) {
+    if (seen.has(entry.path)) {
+      continue;
+    }
+    homes.push({
+      ...entry,
+      label: entry.label || entry.path,
+      kind: entry.type,
+      imported: true,
+      status: entry.type === "unsupported" ? "unsupported" : "active",
+      eventCount: 0,
+      sessionCount: 0,
+    });
+  }
+  return homes;
+}
+
+export function renderHomesHtml(homes, { canModify = false } = {}) {
+  // Render paths and labels as escaped text because they may come from imported logs.
+  if (!homes.length) {
+    return `<div class="empty">没有发现 Codex 目录</div>`;
+  }
+  return homes
+    .map((home) => {
+      const label = escapeHtml(home.label);
+      const kind = escapeHtml(home.kind || home.type || "");
+      const status = escapeHtml(homeStatusLabel(home));
+      const pathText = escapeHtml(home.path);
+      const reason = home.reason ? `<div class="home-reason">${escapeHtml(home.reason)}</div>` : "";
+      const counts = `${formatTokens(home.eventCount || 0)} 条事件 · ${formatTokens(home.sessionCount || 0)} 个会话`;
+      const removeButton =
+        canModify && home.imported
+          ? `<button class="home-remove" type="button" data-import-action="remove" data-import-path="${pathText}" aria-label="移除 ${label}">移除</button>`
+          : "";
+      return `
         <div class="home-row">
           <div class="home-label">
-            <strong>${home.label}</strong>
-            <span class="home-kind">${home.kind}</span>
+            <strong>${label}</strong>
+            <span class="home-kind">${kind}</span>
           </div>
-          <div class="home-path" title="${home.path}">${home.path}</div>
+          <div class="home-meta">
+            <span class="home-status">${status}</span>
+            <span>${counts}</span>
+            ${removeButton}
+          </div>
+          <div class="home-path" title="${pathText}">${pathText}</div>
+          ${reason}
         </div>
-      `,
-    )
+      `;
+    })
     .join("");
 }
 
+function renderHomes(homes, options = {}) {
+  const container = $("#homeList");
+  container.innerHTML = renderHomesHtml(homes, options);
+}
+
 function metadataFromReport(report) {
+  const homeStats = new Map();
+  for (const event of report.events) {
+    const current = homeStats.get(event.homeId) || {
+      eventCount: 0,
+      sessions: new Set(),
+    };
+    current.eventCount += 1;
+    current.sessions.add(event.sessionId);
+    homeStats.set(event.homeId, current);
+  }
   return {
     generatedAt: report.generatedAt,
     eventCount: report.events.length,
     sessionCount: report.sessions.length,
-    homes: report.homes,
+    homes: report.homes.map((home) => {
+      const stats = homeStats.get(home.id) || { eventCount: 0, sessions: new Set() };
+      return {
+        ...home,
+        status: stats.eventCount > 0 ? "active" : "no-events",
+        eventCount: stats.eventCount,
+        sessionCount: stats.sessions.size,
+      };
+    }),
     warnings: report.warnings || [],
   };
 }
@@ -697,13 +972,25 @@ function render() {
   }
   hideUsageTooltip();
   renderMetrics(summary);
+  renderComparison(summary);
   $("#rangeLabel").textContent = rangeLabel(summary);
   const channelColors = getChannelColors(summary.channels);
+  const projectRows = filterRankedRows(summary.projects, {
+    query: state.projectQuery,
+    expanded: state.projectsExpanded,
+  });
+  const modelRows = filterRankedRows(summary.models, {
+    query: state.modelQuery,
+    expanded: state.modelsExpanded,
+  });
   renderBarList($("#channelList"), summary.channels, channelColors);
-  renderCompactList($("#projectList"), summary.projects);
-  renderCompactList($("#modelList"), summary.models);
-  renderHomes(metadata.homes || []);
+  renderCompactList($("#projectList"), projectRows);
+  renderCompactList($("#modelList"), modelRows);
+  updateRankedListControls("project", summary.projects);
+  updateRankedListControls("model", summary.models);
+  renderHomes(homeRowsFromMetadata(metadata), { canModify: !isStaticSnapshot() });
   drawTimeline($("#timelineChart"), summary.timeline, summary.channels, channelColors);
+  renderTimelineDetails($("#timelineDetails"), summary.timeline);
 }
 
 function clockTime(date = new Date()) {
@@ -715,13 +1002,41 @@ function setAutoRefreshStatus(message) {
 }
 
 function setImportControlsDisabled(disabled) {
-  for (const selector of ["#importButton", "#addImportButton"]) {
+  for (const selector of ["#importButton", "#addImportButton", "#pickImportDirectoryButton"]) {
     const button = $(selector);
     if (!button) {
       continue;
     }
     button.disabled = disabled;
     button.title = disabled ? "静态快照不能导入目录" : "";
+  }
+}
+
+async function pickImportDirectory() {
+  if (isStaticSnapshot()) {
+    setImportMessage("静态快照不能选择目录，请启动本地服务或手动输入路径。", true);
+    return;
+  }
+
+  const pickButton = $("#pickImportDirectoryButton");
+  pickButton.disabled = true;
+  setImportMessage("正在打开文件夹选择器...");
+  try {
+    const response = await fetch("/api/pick-directory", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || `API ${response.status}`);
+    }
+    if (data.path) {
+      $("#importPath").value = data.path;
+      setImportMessage("已选择目录，可继续导入。");
+    } else {
+      setImportMessage("没有选择目录。");
+    }
+  } catch (error) {
+    setImportMessage(`选择失败：${error.message}，也可以手动输入路径。`, true);
+  } finally {
+    pickButton.disabled = false;
   }
 }
 
@@ -777,6 +1092,24 @@ async function submitImportDirectory(event) {
   } finally {
     submitButton.disabled = false;
   }
+}
+
+async function removeImportDirectory(importPath) {
+  // Removing an import mutates local service state, so static snapshots refuse it.
+  if (isStaticSnapshot()) {
+    setAutoRefreshStatus("静态快照不能移除导入目录，请启动本地服务后再操作");
+    return;
+  }
+  setAutoRefreshStatus("正在移除导入目录...");
+  const response = await fetch(`/api/imports?path=${encodeURIComponent(importPath)}`, {
+    method: "DELETE",
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || `API ${response.status}`);
+  }
+  setAutoRefreshStatus("已移除导入目录，正在刷新...");
+  await loadUsage({ force: true });
 }
 
 function autoRefreshReadyMessage(checkedAt = new Date()) {
@@ -926,6 +1259,25 @@ function refreshViewForFilters() {
   void loadUsage({ skipCheck: true });
 }
 
+function updateRankedQuery(kind, value) {
+  // Query changes are purely local and should not trigger a server rescan.
+  if (kind === "project") {
+    state.projectQuery = value;
+  } else {
+    state.modelQuery = value;
+  }
+  render();
+}
+
+function toggleRankedExpansion(kind) {
+  if (kind === "project") {
+    state.projectsExpanded = !state.projectsExpanded;
+  } else {
+    state.modelsExpanded = !state.modelsExpanded;
+  }
+  render();
+}
+
 function bootDashboard() {
   setupUsageTooltip();
 
@@ -1004,7 +1356,23 @@ function bootDashboard() {
   $("#refreshButton").addEventListener("click", () => loadUsage({ force: true }));
   $("#importButton").addEventListener("click", openImportDialog);
   $("#addImportButton").addEventListener("click", openImportDialog);
+  $("#projectSearch").addEventListener("input", (event) => updateRankedQuery("project", event.target.value));
+  $("#modelSearch").addEventListener("input", (event) => updateRankedQuery("model", event.target.value));
+  $("#projectToggle").addEventListener("click", () => toggleRankedExpansion("project"));
+  $("#modelToggle").addEventListener("click", () => toggleRankedExpansion("model"));
+  $("#homeList").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-import-action='remove']");
+    if (!button) {
+      return;
+    }
+    button.disabled = true;
+    removeImportDirectory(button.dataset.importPath).catch((error) => {
+      button.disabled = false;
+      setAutoRefreshStatus(`移除失败：${error.message}`);
+    });
+  });
   $("#importForm").addEventListener("submit", submitImportDirectory);
+  $("#pickImportDirectoryButton").addEventListener("click", pickImportDirectory);
   $("#cancelImportButton").addEventListener("click", closeImportDialog);
   $("#closeImportDialogButton").addEventListener("click", closeImportDialog);
   $("#importDialog").addEventListener("click", (event) => {

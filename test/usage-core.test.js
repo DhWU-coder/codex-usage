@@ -222,6 +222,28 @@ test("summarizeUsage filters recent natural month ranges", () => {
   assert.equal(indexedSummary.totals.total, 500);
 });
 
+test("summarizeUsage includes previous-period comparison totals", () => {
+  const events = [
+    usageEvent("2026-06-02T09:00:00", 100),
+    usageEvent("2026-06-03T09:00:00", 300),
+  ];
+  const filters = {
+    preset: "today",
+    bucket: "day",
+    now: "2026-06-03T12:00:00",
+  };
+
+  const summary = summarizeUsage({ generatedAt: "", events }, filters);
+  const indexedSummary = summarizeUsageIndex(usageIndex(events), filters);
+
+  assert.equal(summary.comparison.previousTotals.total, 100);
+  assert.equal(summary.comparison.totalDelta, 200);
+  assert.equal(summary.comparison.percentChange, 200);
+  assert.equal(indexedSummary.comparison.previousTotals.total, 100);
+  assert.equal(indexedSummary.comparison.totalDelta, 200);
+  assert.equal(indexedSummary.comparison.percentChange, 200);
+});
+
 test("summarizeUsage filters recent half-year and manual day ranges", () => {
   const halfYearEvents = [
     usageEvent("2025-12-02T12:00:00", 100),

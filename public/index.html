@@ -129,6 +129,8 @@
         </article>
       </section>
 
+      <section id="comparisonSummary" class="comparison-strip" aria-label="趋势变化"></section>
+
       <section class="main-grid">
         <section class="panel chart-panel">
           <div class="panel-heading">
@@ -136,6 +138,7 @@
             <span id="rangeLabel"></span>
           </div>
           <canvas id="timelineChart" width="960" height="320"></canvas>
+          <div id="timelineDetails" class="timeline-details" aria-label="时间分布明细"></div>
         </section>
 
         <section class="panel">
@@ -149,13 +152,21 @@
       <section class="wide-grid">
         <section class="panel">
           <div class="panel-heading">
-            <h2>项目目录 Top 25</h2>
+            <h2>项目目录</h2>
+            <div class="list-tools">
+              <input id="projectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目目录" />
+              <button id="projectToggle" class="panel-action" type="button" aria-expanded="false" hidden>展开</button>
+            </div>
           </div>
           <div id="projectList" class="compact-list"></div>
         </section>
         <section class="panel">
           <div class="panel-heading">
             <h2>模型分布</h2>
+            <div class="list-tools">
+              <input id="modelSearch" type="search" autocomplete="off" placeholder="搜索模型" aria-label="搜索模型" />
+              <button id="modelToggle" class="panel-action" type="button" aria-expanded="false" hidden>展开</button>
+            </div>
           </div>
           <div id="modelList" class="compact-list"></div>
         </section>
@@ -179,7 +190,10 @@
           <p class="dialog-copy">支持 Codex home，或包含 .codex-usage/usage.jsonl 的项目目录。</p>
           <label>
             目录路径
-            <input id="importPath" type="text" autocomplete="off" placeholder="/Users/you/project/openai_codex" />
+            <div class="path-picker">
+              <input id="importPath" type="text" autocomplete="off" placeholder="/Users/you/project/openai_codex" />
+              <button id="pickImportDirectoryButton" type="button">选择文件夹</button>
+            </div>
           </label>
           <p id="importMessage" class="dialog-message" role="status"></p>
           <div class="dialog-actions">

@@ -33,4 +33,9 @@ test("renderStaticDashboardHtml embeds usage data and app assets", () => {
   assert.match(html, /id="addImportButton"/);
   assert.match(html, /id="importDialog"/);
   assert.match(html, /id="importPath"/);
+  assert.match(html, /id="pickImportDirectoryButton"/);
+  assert.match(html, /id="comparisonSummary"/);
+  assert.match(html, /id="projectSearch"/);
+  assert.match(html, /id="modelSearch"/);
+  assert.match(html, /id="timelineDetails"/);
 });

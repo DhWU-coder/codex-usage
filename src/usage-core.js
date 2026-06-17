@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -330,7 +330,6 @@ function readTokenUsage(payload) {
 }
 
 export async function parseSessionFile(filePath, home) {
-  const text = await readFile(filePath, "utf8");
   const meta = {
     id: fallbackSessionId(filePath),
     source: "",
@@ -347,17 +346,8 @@ export async function parseSessionFile(filePath, home) {
   let tokenEventCount = 0;
   const events = [];
 
-  for (const line of text.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
+  // Stream JSONL rows so full-detail reports do not read large session files at once.
+  for await (const row of readJsonlRows(filePath)) {
     if (row.timestamp) {
       firstAt ||= row.timestamp;
       lastAt = row.timestamp;
@@ -909,6 +899,14 @@ function recentDateRange(value, now) {
 }
 
 export function resolveDateRange(filters = {}, events = []) {
+  return resolveDateRangeFromTimestamps(
+    filters,
+    events.map((event) => Date.parse(event.timestamp)).filter(Number.isFinite),
+  );
+}
+
+function resolveDateRangeFromTimestamps(filters = {}, timestamps = []) {
+  // Report and index summaries share this resolver to avoid date-range drift.
   const now = filters.now ? new Date(filters.now) : new Date();
   const preset = filters.preset || "all";
   if (preset === "today") {
@@ -938,15 +936,12 @@ export function resolveDateRange(filters = {}, events = []) {
     }
   }
 
-  const dates = events
-    .map((event) => new Date(event.timestamp))
-    .filter((date) => !Number.isNaN(date.getTime()));
-  if (!dates.length) {
+  if (!timestamps.length) {
     return { start: null, end: null, preset: "all" };
   }
   return {
-    start: startOfLocalDay(new Date(Math.min(...dates))),
-    end: endOfLocalDay(new Date(Math.max(...dates))),
+    start: startOfLocalDay(new Date(Math.min(...timestamps))),
+    end: endOfLocalDay(new Date(Math.max(...timestamps))),
     preset: "all",
   };
 }
@@ -1017,44 +1012,10 @@ function groupByUsage(events, keyFn, options = {}) {
 }
 
 function indexDateRange(filters = {}, events = []) {
-  const now = filters.now ? new Date(filters.now) : new Date();
-  const preset = filters.preset || "all";
-  if (preset === "today") {
-    return { start: startOfLocalDay(now), end: endOfLocalDay(now), preset };
-  }
-  if (preset === "week") {
-    return { start: startOfLocalWeek(now), end: endOfLocalDay(now), preset };
-  }
-  if (preset === "month") {
-    return {
-      start: new Date(now.getFullYear(), now.getMonth(), 1),
-      end: endOfLocalDay(now),
-      preset,
-    };
-  }
-  if (preset === "custom") {
-    return {
-      start: parseDateStart(filters.startDate),
-      end: parseDateEnd(filters.endDate),
-      preset,
-    };
-  }
-  if (preset === "recent") {
-    const range = recentDateRange(filters.recentValue, now);
-    if (range) {
-      return range;
-    }
-  }
-
-  const timestamps = events.map((event) => event.t).filter(Number.isFinite);
-  if (!timestamps.length) {
-    return { start: null, end: null, preset: "all" };
-  }
-  return {
-    start: startOfLocalDay(new Date(Math.min(...timestamps))),
-    end: endOfLocalDay(new Date(Math.max(...timestamps))),
-    preset: "all",
-  };
+  return resolveDateRangeFromTimestamps(
+    filters,
+    events.map((event) => event.t).filter(Number.isFinite),
+  );
 }
 
 function addIndexedUsage(target, event) {
@@ -1120,13 +1081,112 @@ function groupIndexedEvents(index, events, keyFn, options = {}) {
 }
 
 export function usageIndexMetadata(index) {
+  const homeStats = homeStatsFromIndex(index);
   return {
     generatedAt: index.generatedAt,
     eventCount: index.events.length,
     sessionCount: index.sessionCount,
     homeCount: index.homes.length,
-    homes: index.homes,
+    homes: index.homes.map((home) => ({
+      ...home,
+      ...(homeStats.get(home.id) || {
+        status: "no-events",
+        eventCount: 0,
+        sessionCount: 0,
+      }),
+    })),
     warnings: index.warnings,
+  };
+}
+
+function homeStatsFromIndex(index) {
+  // Attach per-home activity counts without expanding the compact index into full events.
+  const stats = new Map();
+  for (const event of index.events) {
+    const homeId = index.strings[event.h] || "";
+    const current = stats.get(homeId) || {
+      status: "active",
+      eventCount: 0,
+      sessions: new Set(),
+    };
+    current.eventCount += 1;
+    current.sessions.add(event.s);
+    stats.set(homeId, current);
+  }
+  return new Map(
+    [...stats.entries()].map(([homeId, stat]) => [
+      homeId,
+      {
+        status: stat.eventCount > 0 ? "active" : "no-events",
+        eventCount: stat.eventCount,
+        sessionCount: stat.sessions.size,
+      },
+    ]),
+  );
+}
+
+function previousPeriodRange(range) {
+  // A previous period is the immediately preceding interval with the same duration.
+  if (!range.start || !range.end || range.preset === "all") {
+    return null;
+  }
+  const durationMs = range.end.getTime() - range.start.getTime() + 1;
+  return {
+    start: new Date(range.start.getTime() - durationMs),
+    end: new Date(range.start.getTime() - 1),
+  };
+}
+
+function percentChange(current, previous) {
+  if (!previous) {
+    return null;
+  }
+  return Math.round(((current - previous) / previous) * 10_000) / 100;
+}
+
+function comparisonLabel(preset) {
+  return {
+    today: "较昨日",
+    week: "较上周",
+    month: "较上月",
+    custom: "较上一等长周期",
+    recent: "较上一等长周期",
+  }[preset] || "暂无对比";
+}
+
+function usageComparison({ range, allEvents, eventTime, eventSession, addEventUsage, currentTotals }) {
+  // Compare current filtered usage with the prior interval while preserving caller-specific event shapes.
+  const previousRange = previousPeriodRange(range);
+  if (!previousRange) {
+    return {
+      label: comparisonLabel(range.preset),
+      previousRange: null,
+      previousTotals: emptyUsage(),
+      previousEventCount: 0,
+      previousSessionCount: 0,
+      totalDelta: currentTotals.total,
+      percentChange: null,
+    };
+  }
+
+  const previousEvents = allEvents.filter((event) => {
+    const time = eventTime(event);
+    return Number.isFinite(time) && time >= previousRange.start.getTime() && time <= previousRange.end.getTime();
+  });
+  const previousTotals = previousEvents.reduce((sum, event) => addEventUsage(sum, event), emptyUsage());
+  const previousSessions = new Set(previousEvents.map(eventSession));
+
+  return {
+    label: comparisonLabel(range.preset),
+    previousRange: {
+      start: previousRange.start.toISOString(),
+      end: previousRange.end.toISOString(),
+    },
+    previousTotals,
+    previousEventCount: previousEvents.length,
+    previousSessionCount: previousSessions.size,
+    totalDelta: currentTotals.total - previousTotals.total,
+    percentChange: percentChange(currentTotals.total, previousTotals.total),
   };
 }
 
@@ -1149,6 +1209,14 @@ export function summarizeUsageIndex(index, filters = {}) {
 
   const sessionIds = new Set(events.map((event) => event.s));
   const totals = events.reduce((sum, event) => addIndexedUsage(sum, event), emptyUsage());
+  const comparison = usageComparison({
+    range,
+    allEvents: index.events,
+    eventTime: (event) => event.t,
+    eventSession: (event) => event.s,
+    addEventUsage: addIndexedUsage,
+    currentTotals: totals,
+  });
   const timeline = groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket), { includeChannels: true })
     .sort((a, b) => a.key.localeCompare(b.key));
 
@@ -1161,6 +1229,7 @@ export function summarizeUsageIndex(index, filters = {}) {
       bucket,
     },
     totals,
+    comparison,
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.h)).size,
@@ -1168,7 +1237,7 @@ export function summarizeUsageIndex(index, filters = {}) {
     channels: groupIndexedEvents(index, events, (event) => strings[event.c]),
     homes: groupIndexedEvents(index, events, (event) => strings[event.l]),
     models: groupIndexedEvents(index, events, (event) => strings[event.m] || "Unknown model"),
-    projects: groupIndexedEvents(index, events, (event) => strings[event.p] || "Unknown cwd").slice(0, 25),
+    projects: groupIndexedEvents(index, events, (event) => strings[event.p] || "Unknown cwd"),
   };
 }
 
@@ -1191,6 +1260,14 @@ export function summarizeUsage(report, filters = {}) {
 
   const sessionIds = new Set(events.map((event) => event.sessionId));
   const totals = events.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
+  const comparison = usageComparison({
+    range,
+    allEvents: report.events,
+    eventTime: (event) => Date.parse(event.timestamp),
+    eventSession: (event) => event.sessionId,
+    addEventUsage: (sum, event) => addUsage(sum, event.total),
+    currentTotals: totals,
+  });
   const timeline = groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket), { includeChannels: true })
     .sort((a, b) => a.key.localeCompare(b.key));
 
@@ -1203,6 +1280,7 @@ export function summarizeUsage(report, filters = {}) {
       bucket,
     },
     totals,
+    comparison,
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.homeId)).size,
@@ -1210,6 +1288,6 @@ export function summarizeUsage(report, filters = {}) {
     channels: groupByUsage(events, (event) => event.channel),
     homes: groupByUsage(events, (event) => event.homeLabel),
     models: groupByUsage(events, (event) => event.model || "Unknown model"),
-    projects: groupByUsage(events, (event) => event.cwd || "Unknown cwd").slice(0, 25),
+    projects: groupByUsage(events, (event) => event.cwd || "Unknown cwd"),
   };
 }
