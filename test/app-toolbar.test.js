@@ -18,6 +18,17 @@ test("toolbar embeds the fillable recent dropdown inside the range segments", as
   assert.match(html, /<input[^>]+id="recentValue"/);
   assert.match(html, /id="recentRangeMenu"/);
   assert.match(html, /id="recentMenuButton"/);
+  assert.match(html, /<input[^>]+id="startDate"[^>]+type="text"/);
+  assert.match(html, /<input[^>]+id="endDate"[^>]+type="text"/);
+  assert.match(html, /id="startDatePicker"/);
+  assert.match(html, /id="endDatePicker"/);
+  assert.match(html, /data-date-picker-button="start"/);
+  assert.match(html, /data-date-picker-button="end"/);
+  // The granularity selector exposes hourly buckets before broader date buckets.
+  assert.ok(html.indexOf('value="hour"') < html.indexOf('value="day"'));
+  assert.match(html, /<option value="hour">按小时<\/option>/);
+  // The dashboard still starts at daily granularity until the today preset is chosen.
+  assert.match(html, /<option value="day" selected>按天<\/option>/);
   assert.match(css, /\.segmented\s+\.recent-segment\s+\.recent-segment-label\s*{[^}]*color:\s*inherit;/s);
   assert.match(css, /\.segmented\s+\.recent-segment\s*{[^}]*gap:\s*10px;/s);
   assert.match(css, /\.segmented\s+\.recent-segment\s*{[^}]*padding:\s*0 10px 0 14px;/s);
@@ -31,6 +42,9 @@ test("toolbar embeds the fillable recent dropdown inside the range segments", as
   assert.match(css, /\.segmented\s+\.recent-menu-button:hover\s*{[^}]*background:\s*transparent;/s);
   assert.match(css, /\.recent-range-menu\s*{[^}]*position:\s*absolute;/s);
   assert.match(css, /\.recent-range-menu\s+button\[aria-selected="true"\]\s*{/);
+  assert.match(css, /\.date-picker-popover\s*{[^}]*position:\s*absolute;/s);
+  assert.match(css, /\.date-picker-grid\s*{[^}]*grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\);/s);
+  assert.match(css, /\.date-picker-day\.outside-month\s*{[^}]*color:\s*var\(--muted\);/s);
 
   for (const value of ["1天", "1周", "1个月", "2个月", "3个月", "半年", "一年"]) {
     assert.match(html, new RegExp(`data-recent-option="${value}"`));

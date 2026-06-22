@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeRecentValue, setSummaryFilters, summarize, timelineChannelSegments } from "../public/app.js";
+import {
+  nextPresetState,
+  nextRecentState,
+  normalizeRecentValue,
+  rangeLabel,
+  setSummaryFilters,
+  summarize,
+  timelineChannelSegments,
+} from "../public/app.js";
 
 test("summarize includes channel breakdowns for timeline buckets", () => {
   const summary = summarize({
@@ -28,6 +36,99 @@ test("summarize includes channel breakdowns for timeline buckets", () => {
       ["CLI", 100],
     ],
   );
+});
+
+test("summarize fills a single local day with 24 hourly timeline rows", () => {
+  // Single-day hourly views need empty rows so the chart spans midnight through 24:00.
+  setSummaryFilters({
+    preset: "all",
+    bucket: "hour",
+    now: null,
+    startDate: "",
+    endDate: "",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-05-26T01:15:00",
+          sessionId: "first",
+          channel: "CLI",
+          total: { total: 100, input: 100, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-05-26T01:45:00",
+          sessionId: "second",
+          channel: "CLI",
+          total: { total: 200, input: 200, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-05-26T02:05:00",
+          sessionId: "third",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      [summary.timeline[0], summary.timeline[1], summary.timeline[2], summary.timeline[23]].map((row) => [
+        row.key,
+        row.total.total,
+      ]),
+      [
+        ["2026-05-26 00:00", 0],
+        ["2026-05-26 01:00", 300],
+        ["2026-05-26 02:00", 300],
+        ["2026-05-26 23:00", 0],
+      ],
+    );
+    assert.equal(summary.timeline.length, 24);
+    assert.equal(rangeLabel(summary), "2026-05-26 00:00 至 2026-05-27 00:00 · 按小时");
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
+});
+
+test("today preset defaults the next dashboard bucket to hour", () => {
+  // Range presets reset to their default granularity so stale manual bucket choices do not leak.
+  assert.deepEqual(nextPresetState({ bucket: "month" }, "today"), { preset: "today", bucket: "hour" });
+  assert.deepEqual(nextPresetState({ bucket: "hour" }, "week"), { preset: "week", bucket: "day" });
+  assert.deepEqual(nextPresetState({ bucket: "hour" }, "month"), { preset: "month", bucket: "day" });
+  assert.deepEqual(nextPresetState({ bucket: "hour" }, "all"), { preset: "all", bucket: "day" });
+  assert.deepEqual(nextPresetState({ bucket: "hour" }, "custom"), { preset: "custom", bucket: "day" });
+});
+
+test("recent one-day range defaults to hour and longer recent ranges default to day", () => {
+  // Recent values use the normalized text so manual "1" behaves the same as selecting "1天".
+  assert.deepEqual(nextRecentState({ bucket: "day" }, "1天"), {
+    preset: "recent",
+    recentValue: "1天",
+    bucket: "hour",
+  });
+  assert.deepEqual(nextRecentState({ bucket: "day" }, "1"), {
+    preset: "recent",
+    recentValue: "1天",
+    bucket: "hour",
+  });
+  assert.deepEqual(nextRecentState({ bucket: "hour" }, "1周"), {
+    preset: "recent",
+    recentValue: "1周",
+    bucket: "day",
+  });
+  assert.deepEqual(nextRecentState({ bucket: "hour" }, "1个月"), {
+    preset: "recent",
+    recentValue: "1个月",
+    bucket: "day",
+  });
 });
 
 test("summarize filters recent natural month ranges", () => {
@@ -103,6 +204,59 @@ test("summarize includes previous-period comparison totals", () => {
     assert.equal(summary.comparison.previousTotals.total, 100);
     assert.equal(summary.comparison.totalDelta, 200);
     assert.equal(summary.comparison.percentChange, 200);
+    assert.equal(summary.comparison.averageBaselineTotal, 50);
+    assert.equal(summary.comparison.averageDelta, 250);
+    assert.equal(summary.comparison.averagePercentChange, 500);
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
+});
+
+test("summarize compares week preset with the full previous natural week", () => {
+  setSummaryFilters({
+    preset: "week",
+    bucket: "day",
+    now: "2026-06-22T12:00:00",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-06-15T09:00:00",
+          sessionId: "previous-a",
+          channel: "CLI",
+          total: { total: 500, input: 500, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-21T09:00:00",
+          sessionId: "previous-b",
+          channel: "CLI",
+          total: { total: 200, input: 200, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-22T09:00:00",
+          sessionId: "current",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.equal(summary.totals.total, 300);
+    assert.equal(summary.comparison.previousTotals.total, 700);
+    assert.equal(summary.comparison.totalDelta, -400);
+    assert.equal(summary.comparison.percentChange, -57.14);
+    assert.equal(summary.comparison.averageBaselineTotal, 50);
+    assert.equal(summary.comparison.averageDelta, 250);
+    assert.equal(summary.comparison.averagePercentChange, 500);
   } finally {
     setSummaryFilters({
       preset: "all",

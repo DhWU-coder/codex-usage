@@ -239,9 +239,42 @@ test("summarizeUsage includes previous-period comparison totals", () => {
   assert.equal(summary.comparison.previousTotals.total, 100);
   assert.equal(summary.comparison.totalDelta, 200);
   assert.equal(summary.comparison.percentChange, 200);
+  assert.equal(summary.comparison.averageBaselineTotal, 50);
+  assert.equal(summary.comparison.averageDelta, 250);
+  assert.equal(summary.comparison.averagePercentChange, 500);
   assert.equal(indexedSummary.comparison.previousTotals.total, 100);
   assert.equal(indexedSummary.comparison.totalDelta, 200);
   assert.equal(indexedSummary.comparison.percentChange, 200);
+  assert.equal(indexedSummary.comparison.averageBaselineTotal, 50);
+  assert.equal(indexedSummary.comparison.averageDelta, 250);
+  assert.equal(indexedSummary.comparison.averagePercentChange, 500);
+});
+
+test("summarizeUsage compares week preset with the full previous natural week", () => {
+  const events = [
+    usageEvent("2026-06-15T09:00:00", 500),
+    usageEvent("2026-06-21T09:00:00", 200),
+    usageEvent("2026-06-22T09:00:00", 300),
+  ];
+  const filters = {
+    preset: "week",
+    bucket: "day",
+    now: "2026-06-22T12:00:00",
+  };
+
+  const summary = summarizeUsage({ generatedAt: "", events }, filters);
+  const indexedSummary = summarizeUsageIndex(usageIndex(events), filters);
+
+  assert.equal(summary.totals.total, 300);
+  assert.equal(summary.comparison.previousTotals.total, 700);
+  assert.equal(summary.comparison.totalDelta, -400);
+  assert.equal(summary.comparison.percentChange, -57.14);
+  assert.equal(summary.comparison.averageBaselineTotal, 50);
+  assert.equal(summary.comparison.averageDelta, 250);
+  assert.equal(summary.comparison.averagePercentChange, 500);
+  assert.equal(indexedSummary.comparison.previousTotals.total, 700);
+  assert.equal(indexedSummary.comparison.averageBaselineTotal, 50);
+  assert.equal(indexedSummary.comparison.averageDelta, 250);
 });
 
 test("summarizeUsage filters recent half-year and manual day ranges", () => {
@@ -452,4 +485,32 @@ test("buildUsageReport and summarizeUsage aggregate totals by channel and period
   assert.equal(indexedCustom.totals.total, custom.totals.total);
   assert.equal(custom.timeline[0].key, "2026-05-08");
   assert.equal(indexedCustom.timeline[0].key, "2026-05-08");
+});
+
+test("summarizeUsage and summarizeUsageIndex fill a single local day with 24 hourly rows", () => {
+  // Report and index summaries must both expose empty local-hour buckets for single-day charts.
+  const events = [
+    usageEvent("2026-05-26T01:15:00", 100),
+    usageEvent("2026-05-26T01:45:00", 200),
+    usageEvent("2026-05-26T02:05:00", 300),
+  ];
+  const report = { generatedAt: "2026-05-26T00:00:00", events };
+  const index = usageIndex(events);
+  const summary = summarizeUsage(report, { preset: "all", bucket: "hour" });
+  const indexedSummary = summarizeUsageIndex(index, { preset: "all", bucket: "hour" });
+
+  assert.deepEqual(
+    [summary.timeline[0], summary.timeline[1], summary.timeline[2], summary.timeline[23]].map((row) => [
+      row.key,
+      row.total.total,
+    ]),
+    [
+      ["2026-05-26 00:00", 0],
+      ["2026-05-26 01:00", 300],
+      ["2026-05-26 02:00", 300],
+      ["2026-05-26 23:00", 0],
+    ],
+  );
+  assert.equal(summary.timeline.length, 24);
+  assert.deepEqual(indexedSummary.timeline, summary.timeline);
 });

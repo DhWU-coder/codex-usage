@@ -11,7 +11,7 @@ It helps you answer questions like: How many tokens did I use today? Which proje
 - Scans official Codex session logs locally; no external upload is required
 - Tracks total tokens, input, cached input, output, reasoning output, and session count
 - Supports today, this week, this month, all time, and custom date ranges
-- Shows time trends by day, week, or month
+- Shows time trends by hour, day, week, or month
 - Breaks usage down by channel, project directory, model, and scanned home
 - Provides CLI summaries, an interactive local dashboard, a background gateway, and static HTML snapshots
 - Imports extra Codex homes or project logs generated at `.codex-usage/usage.jsonl`
@@ -134,7 +134,7 @@ node src/cli.js summary --json
 The web dashboard supports:
 
 - Today, this week, this month, all time, and custom date ranges
-- Daily, weekly, and monthly aggregation
+- Hourly, daily, weekly, and monthly aggregation
 - Total tokens, input, cached input, output, reasoning output, and session count
 - Channel breakdown
 - Timeline chart

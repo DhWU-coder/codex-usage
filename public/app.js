@@ -15,6 +15,11 @@ const state = {
   modelQuery: "",
   projectsExpanded: false,
   modelsExpanded: false,
+  datePickerField: "",
+  datePickerViews: {
+    start: null,
+    end: null,
+  },
 };
 
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
@@ -231,6 +236,99 @@ function dateKey(date) {
   return `${year}-${month}-${day}`;
 }
 
+const datePickerWeekdays = ["一", "二", "三", "四", "五", "六", "日"];
+
+function parseLocalDate(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  return date;
+}
+
+function normalizeDateInput(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const date = parseLocalDate(trimmed);
+  return date ? dateKey(date) : null;
+}
+
+function monthStart(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+export function datePickerMonthModel(viewDate = new Date(), selectedValue = "") {
+  const selectedDate = parseLocalDate(selectedValue);
+  const visibleMonth = monthStart(viewDate instanceof Date ? viewDate : new Date(viewDate));
+  const mondayOffset = (visibleMonth.getDay() + 6) % 7;
+  const firstCell = addDays(visibleMonth, -mondayOffset);
+  const cells = Array.from({ length: 42 }, (_, index) => {
+    const date = addDays(firstCell, index);
+    const value = dateKey(date);
+    return {
+      date: value,
+      day: date.getDate(),
+      inCurrentMonth: date.getMonth() === visibleMonth.getMonth(),
+      selected: selectedDate ? value === dateKey(selectedDate) : false,
+    };
+  });
+  return {
+    year: visibleMonth.getFullYear(),
+    month: visibleMonth.getMonth() + 1,
+    weekdays: datePickerWeekdays,
+    cells,
+  };
+}
+
+export function renderDatePickerHtml({ field = "start", viewDate = new Date(), selectedValue = "" } = {}) {
+  const model = datePickerMonthModel(viewDate, selectedValue);
+  const escapedField = escapeHtml(field);
+  return `
+    <div class="date-picker-heading">
+      <button class="date-picker-nav" type="button" data-date-picker-action="prev" data-date-picker-field="${escapedField}" aria-label="上个月">‹</button>
+      <div class="date-picker-title">${model.year}年${String(model.month).padStart(2, "0")}月</div>
+      <button class="date-picker-nav" type="button" data-date-picker-action="next" data-date-picker-field="${escapedField}" aria-label="下个月">›</button>
+    </div>
+    <div class="date-picker-grid">
+      ${model.weekdays.map((weekday) => `<div class="date-picker-weekday">${weekday}</div>`).join("")}
+      ${model.cells
+        .map((cell) => {
+          const classes = ["date-picker-day"];
+          if (!cell.inCurrentMonth) {
+            classes.push("outside-month");
+          }
+          if (cell.selected) {
+            classes.push("selected");
+          }
+          return `<button type="button" data-date="${cell.date}" data-date-picker-field="${escapedField}" class="${classes.join(" ")}">${cell.day}</button>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function hourKey(date) {
+  // Hour buckets use local wall-clock time to match the existing day/week/month grouping.
+  const hour = String(date.getHours()).padStart(2, "0");
+  return `${dateKey(date)} ${hour}:00`;
+}
+
+function hourBoundaryKey(date) {
+  // Range labels use hour boundaries, so a day ending at 23:59:59.999 displays as next-day 00:00.
+  return hourKey(date);
+}
+
 function asDate(value) {
   if (!value) {
     return null;
@@ -244,6 +342,16 @@ function startOfDay(date) {
 
 function endOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+function isSingleLocalDayRange(range = {}) {
+  // The hourly chart only fills 24 buckets when the selected range resolves to one local calendar day.
+  const start = asDate(range.start);
+  const end = asDate(range.end);
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return false;
+  }
+  return dateKey(start) === dateKey(end);
 }
 
 function daysInMonth(year, monthIndex) {
@@ -320,8 +428,17 @@ function startOfWeek(date) {
   return start;
 }
 
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
 function bucketKey(timestamp, bucket) {
   const date = new Date(timestamp);
+  if (bucket === "hour") {
+    return hourKey(date);
+  }
   if (bucket === "month") {
     return dateKey(date).slice(0, 7);
   }
@@ -425,15 +542,94 @@ function groupEvents(events, keyFn, options = {}) {
   }));
 }
 
+function emptyTimelineRow(key) {
+  // Empty rows let single-day hourly charts show zero-use hours without special render code.
+  return {
+    key,
+    name: key,
+    count: 0,
+    sessions: 0,
+    total: emptyUsage(),
+    channels: [],
+  };
+}
+
+function completeHourlyTimeline(rows, range, bucket) {
+  // Single-day hourly charts should span the whole day, not only hours that have usage.
+  if (bucket !== "hour" || !isSingleLocalDayRange(range)) {
+    return rows;
+  }
+  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
+  const start = startOfDay(asDate(range.start));
+  return Array.from({ length: 24 }, (_, hour) => {
+    const bucketStart = new Date(start);
+    bucketStart.setHours(hour, 0, 0, 0);
+    const key = hourKey(bucketStart);
+    return rowsByKey.get(key) || emptyTimelineRow(key);
+  });
+}
+
 function previousPeriodRange(range) {
-  // Only bounded presets have a meaningful previous period to compare against.
   if (!range.start || !range.end || state.preset === "all") {
     return null;
+  }
+  if (state.preset === "today") {
+    const previousDay = addDays(startOfDay(asDate(range.start)), -1);
+    return {
+      start: previousDay,
+      end: endOfDay(previousDay),
+    };
+  }
+  if (state.preset === "week") {
+    const previousWeekStart = addDays(startOfWeek(asDate(range.start)), -7);
+    return {
+      start: previousWeekStart,
+      end: endOfDay(addDays(previousWeekStart, 6)),
+    };
+  }
+  if (state.preset === "month") {
+    const currentMonthStart = new Date(asDate(range.start).getFullYear(), asDate(range.start).getMonth(), 1);
+    return {
+      start: new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth() - 1, 1),
+      end: endOfDay(new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth(), 0)),
+    };
   }
   const durationMs = range.end.getTime() - range.start.getTime() + 1;
   return {
     start: new Date(range.start.getTime() - durationMs),
     end: new Date(range.start.getTime() - 1),
+  };
+}
+
+function rangeDurationMs(range) {
+  const start = asDate(range?.start);
+  const end = asDate(range?.end);
+  if (!start || !end) {
+    return 0;
+  }
+  return Math.max(0, end.getTime() - start.getTime() + 1);
+}
+
+function currentElapsedMs(range, now) {
+  const start = asDate(range?.start);
+  const end = asDate(range?.end);
+  if (!start || !end || Number.isNaN(now?.getTime())) {
+    return rangeDurationMs(range);
+  }
+  const boundedEnd = Math.min(end.getTime(), Math.max(start.getTime(), now.getTime()));
+  return Math.max(0, boundedEnd - start.getTime() + 1);
+}
+
+function averageTrend(currentTotals, previousTotals, range, previousRange, now) {
+  const previousDurationMs = rangeDurationMs(previousRange);
+  const elapsedMs = currentElapsedMs(range, now);
+  const averageBaselineTotal = previousDurationMs
+    ? Math.round((previousTotals.total * elapsedMs) / previousDurationMs)
+    : 0;
+  return {
+    averageBaselineTotal,
+    averageDelta: currentTotals.total - averageBaselineTotal,
+    averagePercentChange: percentChange(currentTotals.total, averageBaselineTotal),
   };
 }
 
@@ -455,7 +651,7 @@ function percentChange(current, previous) {
 }
 
 function summarizeComparison(allEvents, range, currentTotals) {
-  // Static exports compute trends client-side because no API is available.
+  // 静态导出没有 API 可用，因此在浏览器端复用同一套趋势口径。
   const previousRange = previousPeriodRange(range);
   if (!previousRange) {
     return {
@@ -466,6 +662,9 @@ function summarizeComparison(allEvents, range, currentTotals) {
       previousSessionCount: 0,
       totalDelta: currentTotals.total,
       percentChange: null,
+      averageBaselineTotal: 0,
+      averageDelta: currentTotals.total,
+      averagePercentChange: null,
     };
   }
   const previousEvents = allEvents.filter((event) => {
@@ -473,6 +672,8 @@ function summarizeComparison(allEvents, range, currentTotals) {
     return Number.isFinite(time) && time >= previousRange.start.getTime() && time <= previousRange.end.getTime();
   });
   const previousTotals = previousEvents.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
+  const now = state.now ? new Date(state.now) : new Date();
+  const average = averageTrend(currentTotals, previousTotals, range, previousRange, now);
   return {
     label: comparisonLabel(),
     previousRange: {
@@ -484,6 +685,7 @@ function summarizeComparison(allEvents, range, currentTotals) {
     previousSessionCount: new Set(previousEvents.map((event) => event.sessionId)).size,
     totalDelta: currentTotals.total - previousTotals.total,
     percentChange: percentChange(currentTotals.total, previousTotals.total),
+    ...average,
   };
 }
 
@@ -503,8 +705,12 @@ export function summarize(report) {
     return true;
   });
   const totals = events.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
-  const timeline = groupEvents(events, (event) => bucketKey(event.timestamp, state.bucket), { includeChannels: true }).sort((a, b) =>
-    a.key.localeCompare(b.key),
+  const timeline = completeHourlyTimeline(
+    groupEvents(events, (event) => bucketKey(event.timestamp, state.bucket), { includeChannels: true }).sort((a, b) =>
+      a.key.localeCompare(b.key),
+    ),
+    range,
+    state.bucket,
   );
   const channels = groupEvents(events, (event) => event.channel).sort((a, b) => b.total.total - a.total.total);
   const projects = groupEvents(events, (event) => event.cwd || "Unknown cwd").sort((a, b) => b.total.total - a.total.total);
@@ -533,6 +739,29 @@ export function setSummaryFilters(filters = {}) {
   }
 }
 
+export function defaultBucketForRange(preset = "all", recentValue = "") {
+  // One-day views are hourly by default; broader ranges reset to daily charts.
+  return preset === "today" || (preset === "recent" && normalizeRecentValue(recentValue) === "1天") ? "hour" : "day";
+}
+
+export function nextPresetState(currentState = {}, preset = "all") {
+  // Preset switches intentionally reset granularity to the default for that range.
+  return {
+    preset,
+    bucket: defaultBucketForRange(preset, currentState.recentValue),
+  };
+}
+
+export function nextRecentState(currentState = {}, value = "") {
+  const recentValue = normalizeRecentValue(value);
+  // Recent range edits reset granularity based on whether the selected span is one day.
+  return {
+    preset: "recent",
+    recentValue,
+    bucket: defaultBucketForRange("recent", recentValue),
+  };
+}
+
 function setMetric(id, value) {
   $(id).textContent = formatTokens(value);
   $(id).title = formatTokens(value);
@@ -547,10 +776,16 @@ function renderMetrics(summary) {
   setMetric("#sessionCount", summary.sessionCount);
 }
 
-function rangeLabel(summary) {
+export function rangeLabel(summary) {
   const start = summary.range.start ? dateKey(asDate(summary.range.start)) : "开始";
   const end = summary.range.end ? dateKey(asDate(summary.range.end)) : "现在";
-  const bucket = { day: "按天", week: "按周", month: "按月" }[state.bucket];
+  const bucket = { hour: "按小时", day: "按天", week: "按周", month: "按月" }[state.bucket];
+  if (state.bucket === "hour" && summary.range.start && summary.range.end) {
+    const startDate = asDate(summary.range.start);
+    const endDate = asDate(summary.range.end);
+    const exclusiveEnd = new Date(endDate.getTime() + 1);
+    return `${hourBoundaryKey(startDate)} 至 ${hourBoundaryKey(exclusiveEnd)} · ${bucket}`;
+  }
   return `${start} 至 ${end} · ${bucket}`;
 }
 
@@ -637,6 +872,41 @@ function renderTimelineDetails(container, rows) {
   bindUsageRows(container, ".timeline-detail-row", rows);
 }
 
+function hourlyAxisLabel(key, singleDay) {
+  // Hourly labels stay compact so a 24-hour day can show every tick without long date text.
+  const match = String(key || "").match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})$/);
+  if (!match) {
+    return String(key || "");
+  }
+  return singleDay ? match[4] : `${match[2]}-${match[3]} ${match[4]}`;
+}
+
+export function timelineAxisLabels(rows, options = {}) {
+  // Build label positions separately from drawing so hour sampling stays testable.
+  if (!rows.length) {
+    return [];
+  }
+  const singleHourlyDay = options.bucket === "hour" && isSingleLocalDayRange(options.range);
+  if (singleHourlyDay) {
+    return rows.map((row, index) => ({
+      index,
+      label: hourlyAxisLabel(row.key, true),
+    }));
+  }
+
+  const fallbackMaxLabels = Math.max(2, Math.floor((options.chartWidth || 960) / 120));
+  const maxLabels = Math.max(1, options.maxLabels || fallbackMaxLabels);
+  const labelCount = Math.min(rows.length, maxLabels);
+  return Array.from({ length: labelCount }, (_, position) => {
+    const index = Math.round((position * (rows.length - 1)) / Math.max(1, labelCount - 1));
+    const row = rows[index];
+    return {
+      index,
+      label: options.bucket === "hour" ? hourlyAxisLabel(row.key, false) : row.key,
+    };
+  });
+}
+
 export function filterRankedRows(rows, { query = "", expanded = false, limit = RANKED_LIST_LIMIT } = {}) {
   // Search intentionally scans the full sorted list even when the default view is capped.
   const normalized = String(query || "").trim().toLowerCase();
@@ -659,33 +929,33 @@ function formatPercent(value) {
   return `${sign}${value}%`;
 }
 
-function renderComparison(summary) {
-  // Live and static summaries share the same comparison shape.
-  const container = $("#comparisonSummary");
-  if (!container) {
-    return;
-  }
-  const comparison = summary.comparison;
+function comparisonClass(value) {
+  return value > 0 ? "up" : value < 0 ? "down" : "flat";
+}
+
+export function renderComparisonHtml(comparison) {
   if (!comparison) {
-    container.innerHTML = "";
-    return;
+    return "";
   }
   if (!comparison.previousRange) {
-    container.innerHTML = `
+    return `
       <article class="comparison-item flat">
         <span>趋势变化</span>
         <strong>暂无对比</strong>
         <small>选择今日、本周、本月或最近范围查看</small>
       </article>
     `;
-    return;
   }
-  const deltaClass = comparison.totalDelta > 0 ? "up" : comparison.totalDelta < 0 ? "down" : "flat";
-  container.innerHTML = `
-    <article class="comparison-item ${deltaClass}">
+  return `
+    <article class="comparison-item ${comparisonClass(comparison.totalDelta)}">
       <span>${escapeHtml(comparison.label)}</span>
       <strong>${formatDelta(comparison.totalDelta)}</strong>
       <small>${formatPercent(comparison.percentChange)}</small>
+    </article>
+    <article class="comparison-item ${comparisonClass(comparison.averageDelta)}">
+      <span>平均趋势变化</span>
+      <strong>${formatDelta(comparison.averageDelta)}</strong>
+      <small>${formatPercent(comparison.averagePercentChange)}</small>
     </article>
     <article class="comparison-item">
       <span>上一周期 tokens</span>
@@ -693,6 +963,14 @@ function renderComparison(summary) {
       <small>${formatTokens(comparison.previousSessionCount)} 个会话</small>
     </article>
   `;
+}
+
+function renderComparison(summary) {
+  const container = $("#comparisonSummary");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = renderComparisonHtml(summary.comparison);
 }
 
 function updateRankedListControls(kind, rows) {
@@ -708,7 +986,7 @@ function updateRankedListControls(kind, rows) {
   button.setAttribute("aria-expanded", String(expanded));
 }
 
-function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map()) {
+export function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map(), range = null) {
   const context = canvas.getContext("2d");
   canvas.dataset.usageTooltip = "true";
   timelineBars.set(canvas, []);
@@ -747,17 +1025,19 @@ function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map())
   }
 
   const max = Math.max(...rows.map((row) => row.total.total), 1);
-  const gap = Math.min(10, chartWidth / Math.max(rows.length, 1) * 0.18);
-  const barWidth = Math.max(4, (chartWidth - gap * (rows.length - 1)) / rows.length);
+  const slotWidth = chartWidth / Math.max(rows.length, 1);
+  const gap = Math.min(10, slotWidth * 0.18);
+  const barWidth = Math.max(0.5, slotWidth - gap);
   const bars = [];
 
   rows.forEach((row, index) => {
     const value = row.total.total;
-    const barHeight = Math.max(2, (value / max) * chartHeight);
-    const x = padding.left + index * (barWidth + gap);
+    const barHeight = value ? Math.max(2, (value / max) * chartHeight) : 0;
+    const slotX = padding.left + index * slotWidth;
+    const x = slotX + Math.max(0, (slotWidth - barWidth) / 2);
     const segments = timelineChannelSegments(row, channelRows);
     let y = padding.top + chartHeight;
-    if (!segments.length || !value) {
+    if (value && !segments.length) {
       context.fillStyle = blue;
       context.fillRect(x, y - barHeight, barWidth, barHeight);
     }
@@ -772,9 +1052,9 @@ function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map())
       context.fillRect(x, y, barWidth, Math.max(0.5, segmentHeight));
     }
     bars.push({
-      x: x - gap / 2,
+      x: slotX,
       y: padding.top,
-      width: barWidth + gap,
+      width: slotWidth,
       height: chartHeight,
       row,
     });
@@ -786,15 +1066,14 @@ function drawTimeline(canvas, rows, channelRows = [], channelColors = new Map())
   context.fillText(formatCompact(max), 8, padding.top + 8);
   context.fillText("0", 34, padding.top + chartHeight);
 
-  const labelCount = Math.min(rows.length, 8);
-  for (let i = 0; i < labelCount; i += 1) {
-    const index = Math.round((i * (rows.length - 1)) / Math.max(1, labelCount - 1));
-    const row = rows[index];
-    const x = padding.left + index * (barWidth + gap);
+  const labels = timelineAxisLabels(rows, { bucket: state.bucket, range, chartWidth });
+  for (const label of labels) {
+    const index = label.index;
+    const x = padding.left + index * slotWidth;
     context.save();
     context.translate(x, padding.top + chartHeight + 18);
     context.rotate(-Math.PI / 8);
-    context.fillText(row.key, 0, 0);
+    context.fillText(label.label, 0, 0);
     context.restore();
   }
 }
@@ -989,7 +1268,7 @@ function render() {
   updateRankedListControls("project", summary.projects);
   updateRankedListControls("model", summary.models);
   renderHomes(homeRowsFromMetadata(metadata), { canModify: !isStaticSnapshot() });
-  drawTimeline($("#timelineChart"), summary.timeline, summary.channels, channelColors);
+  drawTimeline($("#timelineChart"), summary.timeline, summary.channels, channelColors, summary.range);
   renderTimelineDetails($("#timelineDetails"), summary.timeline);
 }
 
@@ -1132,6 +1411,122 @@ function updateRecentControls() {
   }
 }
 
+function updateBucketSelect() {
+  // Keep the native select in sync when presets adjust bucket state programmatically.
+  const bucketSelect = $("#bucketSelect");
+  if (bucketSelect && bucketSelect.value !== state.bucket) {
+    bucketSelect.value = state.bucket;
+  }
+}
+
+function dateFieldKey(field) {
+  return field === "end" ? "endDate" : "startDate";
+}
+
+function dateInputForField(field) {
+  return field === "end" ? $("#endDate") : $("#startDate");
+}
+
+function datePickerForField(field) {
+  return field === "end" ? $("#endDatePicker") : $("#startDatePicker");
+}
+
+function datePickerButtonForField(field) {
+  return document.querySelector(`[data-date-picker-button="${field}"]`);
+}
+
+function datePickerViewDate(field) {
+  const selected = parseLocalDate(state[dateFieldKey(field)]);
+  if (selected) {
+    return selected;
+  }
+  if (state.datePickerViews[field]) {
+    return state.datePickerViews[field];
+  }
+  return new Date();
+}
+
+function renderDatePicker(field) {
+  const picker = datePickerForField(field);
+  if (!picker) {
+    return;
+  }
+  picker.innerHTML = renderDatePickerHtml({
+    field,
+    viewDate: datePickerViewDate(field),
+    selectedValue: state[dateFieldKey(field)],
+  });
+}
+
+function closeDatePickers() {
+  state.datePickerField = "";
+  for (const field of ["start", "end"]) {
+    const picker = datePickerForField(field);
+    const button = datePickerButtonForField(field);
+    if (picker) {
+      picker.hidden = true;
+    }
+    if (button) {
+      button.setAttribute("aria-expanded", "false");
+    }
+  }
+}
+
+function setDatePickerOpen(field, open) {
+  if (!open) {
+    closeDatePickers();
+    return;
+  }
+  closeDatePickers();
+  state.datePickerField = field;
+  state.datePickerViews[field] = datePickerViewDate(field);
+  renderDatePicker(field);
+  const picker = datePickerForField(field);
+  const button = datePickerButtonForField(field);
+  if (picker) {
+    picker.hidden = false;
+  }
+  if (button) {
+    button.setAttribute("aria-expanded", "true");
+  }
+}
+
+function applyDateValue(field, value) {
+  const key = dateFieldKey(field);
+  state[key] = value;
+  const input = dateInputForField(field);
+  if (input) {
+    input.value = value;
+  }
+  state.preset = "custom";
+  updatePresetButtons();
+  refreshViewForFilters();
+}
+
+function applyTypedDateValue(field, value) {
+  const normalized = normalizeDateInput(value);
+  if (normalized === null) {
+    return;
+  }
+  applyDateValue(field, normalized);
+}
+
+function selectDatePickerDate(field, value) {
+  const date = parseLocalDate(value);
+  if (!date) {
+    return;
+  }
+  state.datePickerViews[field] = monthStart(date);
+  applyDateValue(field, dateKey(date));
+  closeDatePickers();
+}
+
+function shiftDatePickerMonth(field, offset) {
+  const current = datePickerViewDate(field);
+  state.datePickerViews[field] = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+  renderDatePicker(field);
+}
+
 function setRecentMenuOpen(open) {
   const menu = $("#recentRangeMenu");
   const input = $("#recentValue");
@@ -1147,8 +1542,11 @@ function setRecentMenuOpen(open) {
 }
 
 function activateRecentValue(value) {
-  state.recentValue = normalizeRecentValue(value);
-  state.preset = "recent";
+  const next = nextRecentState(state, value);
+  state.recentValue = next.recentValue;
+  state.preset = next.preset;
+  state.bucket = next.bucket;
+  updateBucketSelect();
   updatePresetButtons();
   updateRecentControls();
   setRecentMenuOpen(false);
@@ -1286,7 +1684,10 @@ function bootDashboard() {
     if (!button) {
       return;
     }
-    state.preset = button.dataset.preset;
+    const next = nextPresetState(state, button.dataset.preset);
+    state.preset = next.preset;
+    state.bucket = next.bucket;
+    updateBucketSelect();
     updatePresetButtons();
     updateRecentControls();
     refreshViewForFilters();
@@ -1297,19 +1698,40 @@ function bootDashboard() {
     refreshViewForFilters();
   });
 
-  $("#startDate").addEventListener("change", (event) => {
-    state.startDate = event.target.value;
-    state.preset = "custom";
-    updatePresetButtons();
-    refreshViewForFilters();
-  });
-
-  $("#endDate").addEventListener("change", (event) => {
-    state.endDate = event.target.value;
-    state.preset = "custom";
-    updatePresetButtons();
-    refreshViewForFilters();
-  });
+  for (const field of ["start", "end"]) {
+    const input = dateInputForField(field);
+    const button = datePickerButtonForField(field);
+    const picker = datePickerForField(field);
+    input.addEventListener("change", (event) => {
+      applyTypedDateValue(field, event.target.value);
+    });
+    input.addEventListener("focus", () => setDatePickerOpen(field, true));
+    input.addEventListener("click", () => setDatePickerOpen(field, true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeDatePickers();
+      }
+    });
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setDatePickerOpen(field, state.datePickerField !== field);
+      input.focus();
+    });
+    picker.addEventListener("click", (event) => {
+      const nav = event.target.closest("[data-date-picker-action]");
+      if (nav) {
+        event.stopPropagation();
+        shiftDatePickerMonth(field, nav.dataset.datePickerAction === "next" ? 1 : -1);
+        return;
+      }
+      const day = event.target.closest("[data-date]");
+      if (!day) {
+        return;
+      }
+      event.stopPropagation();
+      selectDatePickerDate(field, day.dataset.date);
+    });
+  }
 
   $("#recentValue").addEventListener("change", (event) => {
     activateRecentValue(event.target.value);
@@ -1350,6 +1772,9 @@ function bootDashboard() {
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".recent-segment")) {
       setRecentMenuOpen(false);
+    }
+    if (!event.target.closest(".date-input-wrap")) {
+      closeDatePickers();
     }
   });
 
@@ -1407,6 +1832,7 @@ function bootDashboard() {
 
   setTheme(preferredTheme(), { persist: false });
   updateRecentControls();
+  updateBucketSelect();
   setImportControlsDisabled(isStaticSnapshot());
   loadUsage().then(startAutoRefresh);
 }

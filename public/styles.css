@@ -201,6 +201,120 @@ label {
   grid-template-columns: repeat(2, minmax(130px, 1fr));
 }
 
+.date-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.date-input-wrap input {
+  width: 100%;
+  padding-right: 38px;
+}
+
+.date-picker-button {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.date-picker-button::before {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border: 2px solid currentColor;
+  border-top-width: 4px;
+  border-radius: 2px;
+}
+
+.date-picker-button:hover,
+.date-picker-button:focus-visible {
+  background: var(--track);
+  color: var(--ink);
+}
+
+.date-picker-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 296px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.date-picker-popover[hidden] {
+  display: none;
+}
+
+.date-picker-heading {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.date-picker-title {
+  text-align: center;
+  font-weight: 700;
+}
+
+.date-picker-nav,
+.date-picker-day {
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.date-picker-nav:hover,
+.date-picker-nav:focus-visible,
+.date-picker-day:hover,
+.date-picker-day:focus-visible {
+  background: var(--track);
+  border-color: var(--line);
+}
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.date-picker-weekday {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.date-picker-day {
+  font-variant-numeric: tabular-nums;
+}
+
+.date-picker-day.outside-month {
+  color: var(--muted);
+  opacity: 0.58;
+}
+
+.date-picker-day.selected {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--active-ink);
+  opacity: 1;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -354,9 +468,9 @@ select {
 }
 
 .comparison-strip {
-  /* Trend cards sit between metrics and charts so changes are visible without crowding totals. */
+  /* 趋势卡片放在指标和图表之间，方便横向比较变化、均速变化和上一周期总量。 */
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }

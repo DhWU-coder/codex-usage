@@ -10,6 +10,16 @@ function jsonl(rows) {
   return rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
 }
 
+function localHourKey(value) {
+  // API tests derive the expected bucket with the same local-time semantics as the dashboard.
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:00`;
+}
+
 async function makeFixtureHome() {
   const fakeHome = await mkdtemp(path.join(tmpdir(), "codex-server-"));
   const sessionDir = path.join(fakeHome, ".codex", "sessions", "2026", "05", "01");
@@ -60,8 +70,10 @@ test("server serves the dashboard and usage API", async () => {
     const page = await fetch(`${baseUrl}/`);
     const api = await fetch(`${baseUrl}/api/usage`);
     const recent = await fetch(`${baseUrl}/api/usage?preset=recent&recentValue=${encodeURIComponent("14天")}`);
+    const hourly = await fetch(`${baseUrl}/api/usage?bucket=hour`);
     const json = await api.json();
     const recentJson = await recent.json();
+    const hourlyJson = await hourly.json();
 
     assert.equal(page.status, 200);
     assert.match(await page.text(), /Codex Usage/);
@@ -70,6 +82,15 @@ test("server serves the dashboard and usage API", async () => {
     assert.equal(recent.status, 200);
     assert.equal(recentJson.summary.range.preset, "recent");
     assert.equal(recentJson.summary.totals.total, 0);
+    assert.equal(hourly.status, 200);
+    assert.equal(hourlyJson.summary.range.bucket, "hour");
+    assert.equal(hourlyJson.summary.timeline.length, 24);
+    assert.deepEqual(
+      hourlyJson.summary.timeline
+        .filter((row) => row.total.total > 0)
+        .map((row) => [row.key, row.total.total]),
+      [[localHourKey("2026-05-01T02:01:00.000Z"), 123]],
+    );
     assert.equal(json.metadata.eventCount, 1);
     assert.equal(json.metadata.sessionCount, 1);
     assert.equal(json.metadata.homes[0].status, "active");

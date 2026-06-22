@@ -815,8 +815,19 @@ function monthKey(date) {
   return localDateKey(date).slice(0, 7);
 }
 
+function localHourKey(date) {
+  // Hour buckets stay in local time so API summaries match the browser dashboard labels.
+  const hour = String(date.getHours()).padStart(2, "0");
+  return `${localDateKey(date)} ${hour}:00`;
+}
+
 function startOfLocalDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function isSingleLocalDayRange(range = {}) {
+  // Single-day hourly summaries should include zero-use hours for a complete 24-hour chart.
+  return Boolean(range.start && range.end && localDateKey(range.start) === localDateKey(range.end));
 }
 
 function endOfLocalDay(date) {
@@ -828,6 +839,12 @@ function startOfLocalWeek(date) {
   const day = start.getDay() || 7;
   start.setDate(start.getDate() - day + 1);
   return start;
+}
+
+function addLocalDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function parseDateStart(value) {
@@ -947,6 +964,9 @@ function resolveDateRangeFromTimestamps(filters = {}, timestamps = []) {
 }
 
 function bucketKey(date, bucket) {
+  if (bucket === "hour") {
+    return localHourKey(date);
+  }
   if (bucket === "month") {
     return monthKey(date);
   }
@@ -1080,6 +1100,33 @@ function groupIndexedEvents(index, events, keyFn, options = {}) {
     .sort((a, b) => b.total.total - a.total.total);
 }
 
+function emptyTimelineRow(key) {
+  // Empty timeline rows preserve the same response shape as grouped hourly rows.
+  return {
+    key,
+    name: key,
+    count: 0,
+    sessions: 0,
+    total: emptyUsage(),
+    channels: [],
+  };
+}
+
+function completeHourlyTimeline(rows, range, bucket) {
+  // Only single-day hourly views are expanded; longer ranges stay compact and sampled by the chart.
+  if (bucket !== "hour" || !isSingleLocalDayRange(range)) {
+    return rows;
+  }
+  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
+  const start = startOfLocalDay(range.start);
+  return Array.from({ length: 24 }, (_, hour) => {
+    const bucketStart = new Date(start);
+    bucketStart.setHours(hour, 0, 0, 0);
+    const key = localHourKey(bucketStart);
+    return rowsByKey.get(key) || emptyTimelineRow(key);
+  });
+}
+
 export function usageIndexMetadata(index) {
   const homeStats = homeStatsFromIndex(index);
   return {
@@ -1126,14 +1173,62 @@ function homeStatsFromIndex(index) {
 }
 
 function previousPeriodRange(range) {
-  // A previous period is the immediately preceding interval with the same duration.
   if (!range.start || !range.end || range.preset === "all") {
     return null;
+  }
+  if (range.preset === "today") {
+    const previousDay = addLocalDays(startOfLocalDay(range.start), -1);
+    return {
+      start: previousDay,
+      end: endOfLocalDay(previousDay),
+    };
+  }
+  if (range.preset === "week") {
+    const previousWeekStart = addLocalDays(startOfLocalWeek(range.start), -7);
+    return {
+      start: previousWeekStart,
+      end: endOfLocalDay(addLocalDays(previousWeekStart, 6)),
+    };
+  }
+  if (range.preset === "month") {
+    const currentMonthStart = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
+    return {
+      start: new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth() - 1, 1),
+      end: endOfLocalDay(new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth(), 0)),
+    };
   }
   const durationMs = range.end.getTime() - range.start.getTime() + 1;
   return {
     start: new Date(range.start.getTime() - durationMs),
     end: new Date(range.start.getTime() - 1),
+  };
+}
+
+function rangeDurationMs(range) {
+  if (!range?.start || !range?.end) {
+    return 0;
+  }
+  return Math.max(0, range.end.getTime() - range.start.getTime() + 1);
+}
+
+function currentElapsedMs(range, now) {
+  if (!range?.start || !range?.end || Number.isNaN(now?.getTime())) {
+    return rangeDurationMs(range);
+  }
+  const boundedEnd = Math.min(range.end.getTime(), Math.max(range.start.getTime(), now.getTime()));
+  return Math.max(0, boundedEnd - range.start.getTime() + 1);
+}
+
+function averageTrend(currentTotals, previousTotals, range, previousRange, now) {
+  const previousDurationMs = rangeDurationMs(previousRange);
+  const elapsedMs = currentElapsedMs(range, now);
+  const averageBaselineTotal = previousDurationMs
+    ? Math.round((previousTotals.total * elapsedMs) / previousDurationMs)
+    : 0;
+  return {
+    averageBaselineTotal,
+    averageDelta: currentTotals.total - averageBaselineTotal,
+    averagePercentChange: percentChange(currentTotals.total, averageBaselineTotal),
   };
 }
 
@@ -1154,8 +1249,8 @@ function comparisonLabel(preset) {
   }[preset] || "暂无对比";
 }
 
-function usageComparison({ range, allEvents, eventTime, eventSession, addEventUsage, currentTotals }) {
-  // Compare current filtered usage with the prior interval while preserving caller-specific event shapes.
+function usageComparison({ range, allEvents, eventTime, eventSession, addEventUsage, currentTotals, now }) {
+  // 保持调用方事件结构不变，只在这里统一计算上一周期和趋势。
   const previousRange = previousPeriodRange(range);
   if (!previousRange) {
     return {
@@ -1166,6 +1261,9 @@ function usageComparison({ range, allEvents, eventTime, eventSession, addEventUs
       previousSessionCount: 0,
       totalDelta: currentTotals.total,
       percentChange: null,
+      averageBaselineTotal: 0,
+      averageDelta: currentTotals.total,
+      averagePercentChange: null,
     };
   }
 
@@ -1175,6 +1273,7 @@ function usageComparison({ range, allEvents, eventTime, eventSession, addEventUs
   });
   const previousTotals = previousEvents.reduce((sum, event) => addEventUsage(sum, event), emptyUsage());
   const previousSessions = new Set(previousEvents.map(eventSession));
+  const average = averageTrend(currentTotals, previousTotals, range, previousRange, now);
 
   return {
     label: comparisonLabel(range.preset),
@@ -1187,6 +1286,7 @@ function usageComparison({ range, allEvents, eventTime, eventSession, addEventUs
     previousSessionCount: previousSessions.size,
     totalDelta: currentTotals.total - previousTotals.total,
     percentChange: percentChange(currentTotals.total, previousTotals.total),
+    ...average,
   };
 }
 
@@ -1194,6 +1294,7 @@ export function summarizeUsageIndex(index, filters = {}) {
   const bucket = filters.bucket || "day";
   const strings = index.strings;
   const range = indexDateRange(filters, index.events);
+  const now = filters.now ? new Date(filters.now) : new Date();
   const events = index.events.filter((event) => {
     if (!Number.isFinite(event.t)) {
       return false;
@@ -1216,9 +1317,15 @@ export function summarizeUsageIndex(index, filters = {}) {
     eventSession: (event) => event.s,
     addEventUsage: addIndexedUsage,
     currentTotals: totals,
+    now,
   });
-  const timeline = groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket), { includeChannels: true })
-    .sort((a, b) => a.key.localeCompare(b.key));
+  const timeline = completeHourlyTimeline(
+    groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket), { includeChannels: true }).sort((a, b) =>
+      a.key.localeCompare(b.key),
+    ),
+    range,
+    bucket,
+  );
 
   return {
     generatedAt: index.generatedAt,
@@ -1244,6 +1351,7 @@ export function summarizeUsageIndex(index, filters = {}) {
 export function summarizeUsage(report, filters = {}) {
   const bucket = filters.bucket || "day";
   const range = resolveDateRange(filters, report.events);
+  const now = filters.now ? new Date(filters.now) : new Date();
   const events = report.events.filter((event) => {
     const date = new Date(event.timestamp);
     if (Number.isNaN(date.getTime())) {
@@ -1267,9 +1375,15 @@ export function summarizeUsage(report, filters = {}) {
     eventSession: (event) => event.sessionId,
     addEventUsage: (sum, event) => addUsage(sum, event.total),
     currentTotals: totals,
+    now,
   });
-  const timeline = groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket), { includeChannels: true })
-    .sort((a, b) => a.key.localeCompare(b.key));
+  const timeline = completeHourlyTimeline(
+    groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket), { includeChannels: true }).sort((a, b) =>
+      a.key.localeCompare(b.key),
+    ),
+    range,
+    bucket,
+  );
 
   return {
     generatedAt: report.generatedAt,
