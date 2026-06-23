@@ -131,7 +131,7 @@ test("recent one-day range defaults to hour and longer recent ranges default to 
   });
 });
 
-test("summarize filters recent natural month ranges", () => {
+test("summarize filters recent natural-day month ranges", () => {
   setSummaryFilters({
     preset: "recent",
     recentValue: "1个月",
@@ -160,10 +160,132 @@ test("summarize filters recent natural month ranges", () => {
           channel: "CLI",
           total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
         },
+        {
+          timestamp: "2026-06-03T23:59:59",
+          sessionId: "same-day-late",
+          channel: "CLI",
+          total: { total: 400, input: 400, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-04T00:00:00",
+          sessionId: "next-day",
+          channel: "CLI",
+          total: { total: 500, input: 500, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.equal(summary.totals.total, 900);
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
+});
+
+test("summarize fills recent two-day hourly ranges on natural-day boundaries", () => {
+  setSummaryFilters({
+    preset: "recent",
+    recentValue: "2天",
+    bucket: "hour",
+    now: "2026-06-23T10:45:00",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-06-21T23:59:59",
+          sessionId: "old",
+          channel: "CLI",
+          total: { total: 100, input: 100, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-22T00:00:00",
+          sessionId: "start",
+          channel: "CLI",
+          total: { total: 200, input: 200, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-23T23:59:59",
+          sessionId: "end",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-24T00:00:00",
+          sessionId: "next-day",
+          channel: "CLI",
+          total: { total: 400, input: 400, cached: 0, output: 0, reasoning: 0 },
+        },
       ],
     });
 
     assert.equal(summary.totals.total, 500);
+    assert.equal(summary.timeline[0].key, "2026-06-22 00:00");
+    assert.equal(summary.timeline.at(-1).key, "2026-06-23 23:00");
+    assert.equal(summary.timeline.length, 48);
+    assert.equal(rangeLabel(summary), "2026-06-22 00:00 至 2026-06-24 00:00 · 按小时");
+  } finally {
+    setSummaryFilters({
+      preset: "all",
+      recentValue: "1个月",
+      bucket: "day",
+      now: null,
+      startDate: "",
+      endDate: "",
+    });
+  }
+});
+
+test("summarize uses rolling recent day ranges", () => {
+  setSummaryFilters({
+    preset: "recent",
+    recentValue: "1天",
+    bucket: "hour",
+    now: "2026-06-23T10:45:00",
+  });
+
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-06-22T10:44:59",
+          sessionId: "old",
+          channel: "CLI",
+          total: { total: 100, input: 100, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-22T10:45:00",
+          sessionId: "start",
+          channel: "CLI",
+          total: { total: 200, input: 200, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-23T10:45:00",
+          sessionId: "end",
+          channel: "CLI",
+          total: { total: 300, input: 300, cached: 0, output: 0, reasoning: 0 },
+        },
+        {
+          timestamp: "2026-06-23T10:45:01",
+          sessionId: "future",
+          channel: "CLI",
+          total: { total: 400, input: 400, cached: 0, output: 0, reasoning: 0 },
+        },
+      ],
+    });
+
+    assert.equal(summary.totals.total, 500);
+    assert.equal(summary.timeline[0].key, "2026-06-22 10:00");
+    assert.equal(summary.timeline.at(-1).key, "2026-06-23 10:00");
+    assert.equal(summary.timeline.length, 25);
+    assert.equal(rangeLabel(summary), "2026-06-22 10:45 至 2026-06-23 10:45 · 按小时");
   } finally {
     setSummaryFilters({
       preset: "all",

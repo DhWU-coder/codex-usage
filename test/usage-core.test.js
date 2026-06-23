@@ -201,10 +201,12 @@ test("classifyImportDirectory detects project usage logs and Codex homes", async
   assert.equal(home.path, codexHome);
 });
 
-test("summarizeUsage filters recent natural month ranges", () => {
+test("summarizeUsage filters recent natural-day month ranges", () => {
   const events = [
     usageEvent("2026-05-02T12:00:00", 100),
     usageEvent("2026-05-03T00:00:00", 200),
+    usageEvent("2026-06-03T23:59:59", 400),
+    usageEvent("2026-06-04T00:00:00", 500),
     usageEvent("2026-06-03T12:00:00", 300),
   ];
   const report = { generatedAt: "2026-06-03T00:00:00.000Z", events };
@@ -218,8 +220,33 @@ test("summarizeUsage filters recent natural month ranges", () => {
   const summary = summarizeUsage(report, filters);
   const indexedSummary = summarizeUsageIndex(usageIndex(events), filters);
 
-  assert.equal(summary.totals.total, 500);
-  assert.equal(indexedSummary.totals.total, 500);
+  assert.equal(summary.totals.total, 900);
+  assert.equal(indexedSummary.totals.total, 900);
+});
+
+test("summarizeUsage uses rolling recent day ranges", () => {
+  const events = [
+    usageEvent("2026-06-22T10:44:59", 10),
+    usageEvent("2026-06-22T10:45:00", 20),
+    usageEvent("2026-06-23T10:45:00", 30),
+    usageEvent("2026-06-23T10:45:01", 40),
+  ];
+  const filters = {
+    preset: "recent",
+    recentValue: "1天",
+    bucket: "hour",
+    now: "2026-06-23T10:45:00",
+  };
+
+  const summary = summarizeUsage({ generatedAt: "", events }, filters);
+  const indexedSummary = summarizeUsageIndex(usageIndex(events), filters);
+
+  assert.equal(summary.totals.total, 50);
+  assert.equal(indexedSummary.totals.total, 50);
+  assert.equal(summary.timeline[0].key, "2026-06-22 10:00");
+  assert.equal(summary.timeline.at(-1).key, "2026-06-23 10:00");
+  assert.equal(summary.timeline.length, 25);
+  assert.deepEqual(indexedSummary.timeline, summary.timeline);
 });
 
 test("summarizeUsage includes previous-period comparison totals", () => {
@@ -277,16 +304,17 @@ test("summarizeUsage compares week preset with the full previous natural week", 
   assert.equal(indexedSummary.comparison.averageDelta, 250);
 });
 
-test("summarizeUsage filters recent half-year and manual day ranges", () => {
+test("summarizeUsage filters recent natural-day half-year and manual day ranges", () => {
   const halfYearEvents = [
     usageEvent("2025-12-02T12:00:00", 100),
     usageEvent("2025-12-03T00:00:00", 200),
     usageEvent("2026-06-03T12:00:00", 300),
   ];
   const manualDayEvents = [
-    usageEvent("2026-05-19T12:00:00", 10),
-    usageEvent("2026-05-20T00:00:00", 20),
-    usageEvent("2026-06-03T12:00:00", 30),
+    usageEvent("2026-05-20T23:59:59", 10),
+    usageEvent("2026-05-21T00:00:00", 20),
+    usageEvent("2026-06-03T23:59:59", 30),
+    usageEvent("2026-06-04T00:00:00", 40),
   ];
 
   const halfYearFilters = {
@@ -306,6 +334,77 @@ test("summarizeUsage filters recent half-year and manual day ranges", () => {
   assert.equal(summarizeUsageIndex(usageIndex(halfYearEvents), halfYearFilters).totals.total, 500);
   assert.equal(summarizeUsage({ generatedAt: "", events: manualDayEvents }, manualDayFilters).totals.total, 50);
   assert.equal(summarizeUsageIndex(usageIndex(manualDayEvents), manualDayFilters).totals.total, 50);
+});
+
+test("summarizeUsage uses natural-day recent day, week, and month ranges", () => {
+  const twoDayEvents = [
+    usageEvent("2026-06-21T23:59:59", 5),
+    usageEvent("2026-06-22T00:00:00", 10),
+    usageEvent("2026-06-23T23:59:59", 20),
+    usageEvent("2026-06-24T00:00:00", 30),
+  ];
+  const weekEvents = [
+    usageEvent("2026-06-16T23:59:59", 10),
+    usageEvent("2026-06-17T00:00:00", 20),
+    usageEvent("2026-06-23T10:45:00", 30),
+    usageEvent("2026-06-24T00:00:00", 40),
+  ];
+  const monthEvents = [
+    usageEvent("2026-05-22T23:59:59", 100),
+    usageEvent("2026-05-23T00:00:00", 200),
+    usageEvent("2026-06-23T10:45:00", 300),
+    usageEvent("2026-06-24T00:00:00", 400),
+  ];
+  const twoDayFilters = {
+    preset: "recent",
+    recentValue: "2天",
+    bucket: "hour",
+    now: "2026-06-23T10:45:00",
+  };
+  const twoDaySummary = summarizeUsage({ generatedAt: "", events: twoDayEvents }, twoDayFilters);
+  const indexedTwoDaySummary = summarizeUsageIndex(usageIndex(twoDayEvents), twoDayFilters);
+  assert.equal(twoDaySummary.totals.total, 30);
+  assert.equal(indexedTwoDaySummary.totals.total, 30);
+  assert.equal(twoDaySummary.timeline[0].key, "2026-06-22 00:00");
+  assert.equal(twoDaySummary.timeline.at(-1).key, "2026-06-23 23:00");
+  assert.equal(twoDaySummary.timeline.length, 48);
+  assert.deepEqual(indexedTwoDaySummary.timeline, twoDaySummary.timeline);
+
+  const weekFilters = {
+    preset: "recent",
+    recentValue: "1周",
+    bucket: "day",
+    now: "2026-06-23T10:45:00",
+  };
+  const monthFilters = {
+    preset: "recent",
+    recentValue: "1个月",
+    bucket: "day",
+    now: "2026-06-23T10:45:00",
+  };
+
+  assert.equal(summarizeUsage({ generatedAt: "", events: weekEvents }, weekFilters).totals.total, 50);
+  assert.equal(summarizeUsageIndex(usageIndex(weekEvents), weekFilters).totals.total, 50);
+  assert.equal(summarizeUsage({ generatedAt: "", events: monthEvents }, monthFilters).totals.total, 500);
+  assert.equal(summarizeUsageIndex(usageIndex(monthEvents), monthFilters).totals.total, 500);
+});
+
+test("summarizeUsage uses natural-day recent year ranges", () => {
+  const events = [
+    usageEvent("2025-06-22T23:59:59", 100),
+    usageEvent("2025-06-23T00:00:00", 200),
+    usageEvent("2026-06-23T23:59:59", 300),
+    usageEvent("2026-06-24T00:00:00", 400),
+  ];
+  const filters = {
+    preset: "recent",
+    recentValue: "1年",
+    bucket: "day",
+    now: "2026-06-23T10:45:00",
+  };
+
+  assert.equal(summarizeUsage({ generatedAt: "", events }, filters).totals.total, 500);
+  assert.equal(summarizeUsageIndex(usageIndex(events), filters).totals.total, 500);
 });
 
 test("buildUsageReport and summarizeUsage include imported project usage logs", async () => {

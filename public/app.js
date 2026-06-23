@@ -23,6 +23,8 @@ const state = {
 };
 
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
+const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const THEME_STORAGE_KEY = "codexUsageTheme";
 const RANKED_LIST_LIMIT = 25;
 const formatter = new Intl.NumberFormat("en-US");
@@ -329,6 +331,12 @@ function hourBoundaryKey(date) {
   return hourKey(date);
 }
 
+function dateTimeMinuteKey(date) {
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${dateKey(date)} ${hour}:${minute}`;
+}
+
 function asDate(value) {
   if (!value) {
     return null;
@@ -338,6 +346,10 @@ function asDate(value) {
 
 function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfHour(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
 }
 
 function endOfDay(date) {
@@ -412,12 +424,21 @@ function recentDateRange(value, now) {
   if (!parsed) {
     return null;
   }
+  if (parsed.days === 1) {
+    return {
+      start: new Date(now.getTime() - MS_PER_DAY),
+      end: now,
+      preset: "recent",
+      rolling: true,
+    };
+  }
   const start = parsed.days
-    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - parsed.days)
-    : subtractMonthsClamped(now, parsed.months);
+    ? addDays(startOfDay(now), 1 - parsed.days)
+    : startOfDay(subtractMonthsClamped(now, parsed.months));
   return {
-    start: startOfDay(start),
+    start,
     end: endOfDay(now),
+    preset: "recent",
   };
 }
 
@@ -431,6 +452,12 @@ function startOfWeek(date) {
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addHours(date, hours) {
+  const next = new Date(date);
+  next.setHours(next.getHours() + hours);
   return next;
 }
 
@@ -555,15 +582,16 @@ function emptyTimelineRow(key) {
 }
 
 function completeHourlyTimeline(rows, range, bucket) {
-  // Single-day hourly charts should span the whole day, not only hours that have usage.
-  if (bucket !== "hour" || !isSingleLocalDayRange(range)) {
+  // 最近范围按选定边界补齐小时；普通单日范围保留完整自然日补齐。
+  if (bucket !== "hour" || (!isSingleLocalDayRange(range) && range?.preset !== "recent")) {
     return rows;
   }
   const rowsByKey = new Map(rows.map((row) => [row.key, row]));
-  const start = startOfDay(asDate(range.start));
-  return Array.from({ length: 24 }, (_, hour) => {
-    const bucketStart = new Date(start);
-    bucketStart.setHours(hour, 0, 0, 0);
+  const start = range?.preset === "recent" ? startOfHour(asDate(range.start)) : startOfDay(asDate(range.start));
+  const end = range?.preset === "recent" ? startOfHour(asDate(range.end)) : addHours(start, 23);
+  const hourCount = Math.max(0, Math.round((end.getTime() - start.getTime()) / MS_PER_HOUR) + 1);
+  return Array.from({ length: hourCount }, (_, hour) => {
+    const bucketStart = addHours(start, hour);
     const key = hourKey(bucketStart);
     return rowsByKey.get(key) || emptyTimelineRow(key);
   });
@@ -783,6 +811,9 @@ export function rangeLabel(summary) {
   if (state.bucket === "hour" && summary.range.start && summary.range.end) {
     const startDate = asDate(summary.range.start);
     const endDate = asDate(summary.range.end);
+    if (summary.range.rolling) {
+      return `${dateTimeMinuteKey(startDate)} 至 ${dateTimeMinuteKey(endDate)} · ${bucket}`;
+    }
     const exclusiveEnd = new Date(endDate.getTime() + 1);
     return `${hourBoundaryKey(startDate)} 至 ${hourBoundaryKey(exclusiveEnd)} · ${bucket}`;
   }

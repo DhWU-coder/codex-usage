@@ -9,6 +9,8 @@ const SESSION_DIRS = ["sessions", "archived_sessions"];
 const PROJECT_USAGE_DIR = ".codex-usage";
 const PROJECT_USAGE_FILE = "usage.jsonl";
 const PROJECT_LOG_SCHEMA_VERSION = "codex-usage.project-log.v1";
+const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const USAGE_FIELDS = [
   "total",
   "input",
@@ -821,6 +823,10 @@ function localHourKey(date) {
   return `${localDateKey(date)} ${hour}:00`;
 }
 
+function startOfLocalHour(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
+}
+
 function startOfLocalDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -844,6 +850,12 @@ function startOfLocalWeek(date) {
 function addLocalDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addLocalHours(date, hours) {
+  const next = new Date(date);
+  next.setHours(next.getHours() + hours);
   return next;
 }
 
@@ -905,11 +917,19 @@ function recentDateRange(value, now) {
   if (!parsed) {
     return null;
   }
+  if (parsed.days === 1) {
+    return {
+      start: new Date(now.getTime() - MS_PER_DAY),
+      end: now,
+      preset: "recent",
+      rolling: true,
+    };
+  }
   const start = parsed.days
-    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - parsed.days)
-    : subtractMonthsClamped(now, parsed.months);
+    ? addLocalDays(startOfLocalDay(now), 1 - parsed.days)
+    : startOfLocalDay(subtractMonthsClamped(now, parsed.months));
   return {
-    start: startOfLocalDay(start),
+    start,
     end: endOfLocalDay(now),
     preset: "recent",
   };
@@ -1113,15 +1133,16 @@ function emptyTimelineRow(key) {
 }
 
 function completeHourlyTimeline(rows, range, bucket) {
-  // Only single-day hourly views are expanded; longer ranges stay compact and sampled by the chart.
-  if (bucket !== "hour" || !isSingleLocalDayRange(range)) {
+  // 最近范围按选定边界补齐小时；普通单日范围保留完整自然日补齐。
+  if (bucket !== "hour" || (!isSingleLocalDayRange(range) && range?.preset !== "recent")) {
     return rows;
   }
   const rowsByKey = new Map(rows.map((row) => [row.key, row]));
-  const start = startOfLocalDay(range.start);
-  return Array.from({ length: 24 }, (_, hour) => {
-    const bucketStart = new Date(start);
-    bucketStart.setHours(hour, 0, 0, 0);
+  const start = range?.preset === "recent" ? startOfLocalHour(range.start) : startOfLocalDay(range.start);
+  const end = range?.preset === "recent" ? startOfLocalHour(range.end) : addLocalHours(start, 23);
+  const hourCount = Math.max(0, Math.round((end.getTime() - start.getTime()) / MS_PER_HOUR) + 1);
+  return Array.from({ length: hourCount }, (_, hour) => {
+    const bucketStart = addLocalHours(start, hour);
     const key = localHourKey(bucketStart);
     return rowsByKey.get(key) || emptyTimelineRow(key);
   });
@@ -1334,6 +1355,7 @@ export function summarizeUsageIndex(index, filters = {}) {
       start: range.start ? range.start.toISOString() : null,
       end: range.end ? range.end.toISOString() : null,
       bucket,
+      rolling: Boolean(range.rolling),
     },
     totals,
     comparison,
@@ -1392,6 +1414,7 @@ export function summarizeUsage(report, filters = {}) {
       start: range.start ? range.start.toISOString() : null,
       end: range.end ? range.end.toISOString() : null,
       bucket,
+      rolling: Boolean(range.rolling),
     },
     totals,
     comparison,
