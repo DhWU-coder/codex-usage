@@ -1644,7 +1644,7 @@ async function loadUsage({ force = false, skipCheck = false } = {}) {
 }
 
 async function checkForUpdates() {
-  if (isStaticSnapshot() || document.hidden || !state.fingerprint) {
+  if (isStaticSnapshot() || !state.fingerprint) {
     return;
   }
 
@@ -1667,17 +1667,10 @@ async function checkForUpdates() {
 }
 
 function startAutoRefresh() {
-  if (isStaticSnapshot() || state.autoRefreshTimer || document.hidden) {
+  if (isStaticSnapshot() || state.autoRefreshTimer) {
     return;
   }
   state.autoRefreshTimer = window.setInterval(checkForUpdates, AUTO_REFRESH_INTERVAL_MS);
-}
-
-function stopAutoRefresh() {
-  if (state.autoRefreshTimer) {
-    window.clearInterval(state.autoRefreshTimer);
-    state.autoRefreshTimer = null;
-  }
 }
 
 function refreshViewForFilters() {
@@ -1853,12 +1846,10 @@ function bootDashboard() {
   });
   window.addEventListener("resize", render);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      stopAutoRefresh();
-      return;
+    if (!document.hidden) {
+      startAutoRefresh();
+      checkForUpdates();
     }
-    startAutoRefresh();
-    checkForUpdates();
   });
 
   setTheme(preferredTheme(), { persist: false });
